@@ -1,24 +1,21 @@
-# GulioSmart POS — TLS edge for bare public IP
-# Mount openssl certs at /etc/caddy/certs/{cert,key}.pem (IP SAN).
-# Browsers show a warning for self-signed until a domain + Let's Encrypt is used.
+# GulioSmart POS — production edge
+# Domain: tz.pos.guliosmart.com (Cloudflare proxy → origin)
+#
+# Preferred: Let's Encrypt automatic HTTPS (DNS must reach this host on :80,
+# or set Cloudflare record to DNS-only while issuing / renewing).
+# Fallback: mount openssl certs and set tls lines below.
 
 {
-	auto_https off
+	email admin@guliosmart.com
 	servers {
 		protocols h1 h2
 	}
 }
 
-:80 {
-	redir https://{host}{uri} permanent
-}
-
-:443 {
-	tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
-
+{$PUBLIC_HOST} {
 	encode gzip
 
-	# Browser API base: https://IP/api → Nest routes at /
+	# Browser API base: https://host/api → Nest routes at /
 	handle_path /api/* {
 		reverse_proxy api:4000
 	}
