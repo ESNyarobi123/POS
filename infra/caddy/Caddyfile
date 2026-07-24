@@ -1,0 +1,26 @@
+# GulioSmart POS — TLS edge for bare public IP
+# PUBLIC_HOST is injected from compose (e.g. 138.68.145.127)
+# `tls internal` = Caddy local CA (browser warning expected without a domain)
+
+{
+	auto_https disable_redirects
+}
+
+http://{$PUBLIC_HOST} {
+	redir https://{$PUBLIC_HOST}{uri} permanent
+}
+
+https://{$PUBLIC_HOST} {
+	tls internal
+
+	encode gzip
+
+	# Browser API base: https://IP/api  → Nest routes at /
+	handle_path /api/* {
+		reverse_proxy api:4000
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}
