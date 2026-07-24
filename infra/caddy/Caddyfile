@@ -1,17 +1,19 @@
 # GulioSmart POS — TLS edge for bare public IP
-# PUBLIC_HOST from compose (e.g. 138.68.145.127)
-# Certs: infra/caddy/certs/{cert,key}.pem (openssl self-signed with IP SAN)
-# Browsers will warn until you add a real domain + Let's Encrypt.
+# Mount openssl certs at /etc/caddy/certs/{cert,key}.pem (IP SAN).
+# Browsers show a warning for self-signed until a domain + Let's Encrypt is used.
 
 {
 	auto_https off
+	servers {
+		protocols h1 h2
+	}
 }
 
-http://{$PUBLIC_HOST} {
-	redir https://{$PUBLIC_HOST}{uri} permanent
+:80 {
+	redir https://{host}{uri} permanent
 }
 
-https://{$PUBLIC_HOST} {
+:443 {
 	tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
 
 	encode gzip

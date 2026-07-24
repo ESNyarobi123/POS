@@ -36,7 +36,8 @@ packages/database/prisma/*.db-journal
 .docker-data
 
 # TLS certs generated on servers (never commit private keys)
-infra/caddy/certs/
+infra/caddy/certs/*
+!infra/caddy/certs/.gitkeep
 .env.prod
 
 # Misc
