@@ -1,21 +1,30 @@
-# GulioSmart POS — production edge
-# Domain: tz.pos.guliosmart.com (Cloudflare proxy → origin)
-#
-# Preferred: Let's Encrypt automatic HTTPS (DNS must reach this host on :80,
-# or set Cloudflare record to DNS-only while issuing / renewing).
-# Fallback: mount openssl certs and set tls lines below.
+# GulioSmart POS — production edge for tz.pos.guliosmart.com
+# Let's Encrypt on HTTPS. HTTP also served (no forced redirect) so Cloudflare
+# "Flexible" does not loop; set Cloudflare SSL/TLS to Full (strict) in prod.
 
 {
 	email admin@guliosmart.com
+	auto_https disable_redirects
 	servers {
 		protocols h1 h2
 	}
 }
 
-{$PUBLIC_HOST} {
+http://{$PUBLIC_HOST} {
 	encode gzip
 
-	# Browser API base: https://host/api → Nest routes at /
+	handle_path /api/* {
+		reverse_proxy api:4000
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}
+
+https://{$PUBLIC_HOST} {
+	encode gzip
+
 	handle_path /api/* {
 		reverse_proxy api:4000
 	}
