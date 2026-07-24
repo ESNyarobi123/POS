@@ -138,6 +138,7 @@ services:
       PUBLIC_HOST: ${PUBLIC_HOST}
     volumes:
       - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./infra/caddy/certs:/etc/caddy/certs:ro
       - caddy_data:/data
       - caddy_config:/config
     networks:

@@ -35,6 +35,10 @@ packages/database/prisma/*.db-journal
 # Docker volumes (local)
 .docker-data
 
+# TLS certs generated on servers (never commit private keys)
+infra/caddy/certs/
+.env.prod
+
 # Misc
 *.tsbuildinfo
 .vercel

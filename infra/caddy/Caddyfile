@@ -1,9 +1,10 @@
 # GulioSmart POS — TLS edge for bare public IP
-# PUBLIC_HOST is injected from compose (e.g. 138.68.145.127)
-# `tls internal` = Caddy local CA (browser warning expected without a domain)
+# PUBLIC_HOST from compose (e.g. 138.68.145.127)
+# Certs: infra/caddy/certs/{cert,key}.pem (openssl self-signed with IP SAN)
+# Browsers will warn until you add a real domain + Let's Encrypt.
 
 {
-	auto_https disable_redirects
+	auto_https off
 }
 
 http://{$PUBLIC_HOST} {
@@ -11,11 +12,11 @@ http://{$PUBLIC_HOST} {
 }
 
 https://{$PUBLIC_HOST} {
-	tls internal
+	tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
 
 	encode gzip
 
-	# Browser API base: https://IP/api  → Nest routes at /
+	# Browser API base: https://IP/api → Nest routes at /
 	handle_path /api/* {
 		reverse_proxy api:4000
 	}
