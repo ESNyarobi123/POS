@@ -1,0 +1,155 @@
+# GulioSmart Retail POS — full local stack
+# Host ports chosen to avoid common clashes (Redis 6379 → 6380)
+name: guliosmart-pos
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gulio
+      POSTGRES_PASSWORD: gulio
+      POSTGRES_DB: guliosmart_pos
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gulio -d guliosmart_pos"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - gulio
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      # Host 6380 — local redis-server often owns 6379
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - gulio
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - gulio
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+    networks:
+      - gulio
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      API_PORT: "4000"
+      WEB_URL: http://localhost:3010
+      CORS_ORIGINS: http://127.0.0.1:3010,http://localhost:3010
+      DATABASE_URL: postgresql://gulio:gulio@postgres:5432/guliosmart_pos?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-gulio-docker-dev-secret-change-me}
+      JWT_EXPIRES_IN: 8h
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_BUCKET: guliosmart-pos
+      S3_REGION: us-east-1
+      FISCAL_PROVIDER: mock
+      RUN_SEED: "true"
+    ports:
+      - "4010:4000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    networks:
+      - gulio
+
+  worker:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      WORKER_CONNECT_REDIS: "true"
+      DATABASE_URL: postgresql://gulio:gulio@postgres:5432/guliosmart_pos?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-gulio-docker-dev-secret-change-me}
+    networks:
+      - gulio
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:4010
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "3010:3000"
+    networks:
+      - gulio
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+
+networks:
+  gulio:
+    driver: bridge

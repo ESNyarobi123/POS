@@ -1,0 +1,39 @@
+# GulioSmart POS — NestJS API
+FROM node:20-bookworm-slim AS base
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl ca-certificates python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+WORKDIR /app
+
+FROM base AS deps
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
+COPY packages ./packages
+COPY apps/api ./apps/api
+COPY apps/worker/package.json ./apps/worker/package.json
+COPY apps/web/package.json ./apps/web/package.json
+RUN pnpm install --frozen-lockfile
+
+FROM deps AS build
+RUN pnpm --filter @gulio/api build \
+  && pnpm --filter @gulio/database exec prisma generate
+
+FROM node:20-bookworm-slim AS runner
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/* \
+  && groupadd -r gulio && useradd -r -m -g gulio gulio
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV API_PORT=4000
+ENV HOME=/home/gulio
+
+COPY --from=build /app /app
+COPY infra/docker/api-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh \
+  && chown -R gulio:gulio /app /entrypoint.sh /home/gulio
+
+USER gulio
+EXPOSE 4000
+ENTRYPOINT ["/entrypoint.sh"]

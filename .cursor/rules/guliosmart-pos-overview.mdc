@@ -1,0 +1,39 @@
+---
+description: GulioSmart Retail POS — product vision, stack, and interfaces (always apply)
+alwaysApply: true
+---
+
+# GulioSmart Retail POS
+
+Electronics retail OS (phones/computers/accessories) — not a generic supermarket POS.
+
+**Tagline:** Sell smarter. Track everything. Grow everywhere.
+
+## Interfaces
+
+- **POS Register** — scan, cart, pay, receipt, return/exchange
+- **Back Office** — catalog, stock, suppliers, reports, settings, online sync
+- **Mobile Scanner** — count, receive, price check, IMEI, labels
+
+## Stack (locked)
+
+- Frontend: Next.js PWA + TS + Tailwind + Gulio UI
+- Backend: NestJS + Fastify (not Next API routes as main API)
+- DB: PostgreSQL + Prisma
+- Jobs: Redis + BullMQ
+- Storage: MinIO / S3
+- Shape: modular monolith (`apps/web|api|worker` + `packages/*`)
+
+## Multi-tenant from day one
+
+Always carry `organization_id`, `branch_id`, `warehouse_id`, register, session, roles.
+
+## Non-negotiables
+
+- IMEI/serial required before sale completes for tracked devices
+- Stock only via ledger movements
+- POS backend = stock source of truth; Guliosmart website is a channel
+- Offline: cash sales + catalog/cart only; queue sync; no new online/MM pay offline
+- Fiscal via `FiscalProvider` interface (can be pending + retry)
+- Money: never JS float
+- Route work via `.cursor/agents/` — see `agent-routing` rule + root `AGENTS.md`

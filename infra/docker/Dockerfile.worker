@@ -1,0 +1,33 @@
+# GulioSmart POS — BullMQ worker
+FROM node:20-bookworm-slim AS base
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl ca-certificates python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+WORKDIR /app
+
+FROM base AS deps
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
+COPY packages ./packages
+COPY apps/worker ./apps/worker
+COPY apps/api/package.json ./apps/api/package.json
+COPY apps/web/package.json ./apps/web/package.json
+RUN pnpm install --frozen-lockfile
+
+FROM deps AS build
+RUN pnpm --filter @gulio/worker build \
+  && pnpm --filter @gulio/database exec prisma generate
+
+FROM node:20-bookworm-slim AS runner
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/* \
+  && groupadd -r gulio && useradd -r -g gulio gulio
+WORKDIR /app
+ENV NODE_ENV=production
+ENV WORKER_CONNECT_REDIS=true
+
+COPY --from=build /app /app
+RUN chown -R gulio:gulio /app
+USER gulio
+CMD ["node", "apps/worker/dist/main.js"]

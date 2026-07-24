@@ -1,0 +1,844 @@
+// =============================================================================
+// GulioSmart Retail POS — Phase 1 Prisma schema
+// Source: docs/database.md (ERD) · AGENTS.md
+//
+// Stock source of truth: StockMovement (append-only ledger) + StockBalance
+// (projection). Never store sellable qty as Product.stock / Variant.stock.
+//
+// Money: Decimal(19, 4) — never float.
+// Tenancy: organizationId on tenant rows; branchId / warehouseId where scoped.
+//
+// Phase 2 OMITTED (deferred migrations): Supplier, PurchaseOrder, POLine,
+// GoodsReceipt, GRLine, SupplierInvoice, StockTransfer, StockTransferLine,
+// LoyaltyAccount, LoyaltyLedger, StoreCredit, ExternalProductMap,
+// WarrantyRecord, ProviderPayment, WebhookDelivery, SyncState, Exchange.
+// See docs/database.md §3–4. Do not run production migrate until ERD approved.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum SerialStatus {
+  IN_STOCK
+  RESERVED
+  SOLD
+  RETURNED
+  DAMAGED
+  IN_REPAIR
+  SUPPLIER_RETURN
+  TRANSFERRED
+}
+
+enum StockMovementType {
+  PURCHASE_RECEIPT
+  SALE
+  RETURN
+  DAMAGE
+  TRANSFER_OUT
+  TRANSFER_IN
+  ADJUSTMENT
+}
+
+enum SaleStatus {
+  DRAFT
+  HELD
+  COMPLETED
+  VOIDED
+}
+
+enum FiscalStatus {
+  NOT_REQUIRED
+  FISCAL_PENDING
+  FISCAL_OK
+  FISCAL_FAILED
+}
+
+enum RegisterSessionStatus {
+  OPEN
+  CLOSED
+}
+
+enum PaymentMethod {
+  CASH
+  MOBILE_MONEY_MANUAL
+  CARD
+  OTHER
+}
+
+enum ReturnStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
+enum ReturnDisposition {
+  RESTOCK
+  DAMAGE
+  WRITE_OFF
+  SUPPLIER_RETURN
+}
+
+enum StockCountStatus {
+  DRAFT
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
+enum FiscalDocumentStatus {
+  PENDING
+  OK
+  FAILED
+  NOT_REQUIRED
+}
+
+/// Per-user permission override on top of role permissions.
+enum UserPermissionEffect {
+  GRANT
+  DENY
+}
+
+// ---------------------------------------------------------------------------
+// Org / auth (Phase 1)
+// ---------------------------------------------------------------------------
+
+model Organization {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String
+  slug         String   @unique
+  currencyCode String   @default("TZS") @map("currency_code") @db.VarChar(3)
+  timezone     String   @default("Africa/Dar_es_Salaam")
+  settings     Json     @default("{}")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  branches          Branch[]
+  warehouses        Warehouse[]
+  registers         Register[]
+  registerSessions  RegisterSession[]
+  users             User[]
+  roles             Role[]
+  userPermissions   UserPermission[]
+  brands            Brand[]
+  categories        Category[]
+  products          Product[]
+  variants          Variant[]
+  barcodes          Barcode[]
+  priceHistories    PriceHistory[]
+  serialUnits       SerialUnit[]
+  stockBalances     StockBalance[]
+  stockMovements    StockMovement[]
+  stockCounts       StockCount[]
+  customers         Customer[]
+  sales             Sale[]
+  saleItems         SaleItem[]
+  payments          Payment[]
+  heldSales         HeldSale[]
+  returns           Return[]
+  auditLogs         AuditLog[]
+  outboxEvents      OutboxEvent[]
+  fiscalDocuments   FiscalDocument[]
+
+  @@map("organizations")
+}
+
+model Branch {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  name           String
+  code           String
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization     Organization      @relation(fields: [organizationId], references: [id])
+  warehouses       Warehouse[]
+  registers        Register[]
+  registerSessions RegisterSession[]
+  userBranches     UserBranch[]
+  sales            Sale[]
+  returns          Return[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@map("branches")
+}
+
+model Warehouse {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  branchId       String   @map("branch_id") @db.Uuid
+  name           String
+  isDefault      Boolean  @default(false) @map("is_default")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  branch         Branch          @relation(fields: [branchId], references: [id])
+  serialUnits    SerialUnit[]
+  stockBalances  StockBalance[]
+  stockMovements StockMovement[]
+  stockCounts    StockCount[]
+  sales          Sale[]
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@map("warehouses")
+}
+
+model Register {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  branchId       String   @map("branch_id") @db.Uuid
+  name           String
+  code           String
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization      @relation(fields: [organizationId], references: [id])
+  branch       Branch            @relation(fields: [branchId], references: [id])
+  sessions     RegisterSession[]
+  sales        Sale[]
+  heldSales    HeldSale[]
+
+  @@unique([organizationId, branchId, code])
+  @@index([organizationId])
+  @@index([branchId])
+  @@map("registers")
+}
+
+model RegisterSession {
+  id                 String                @id @default(uuid()) @db.Uuid
+  organizationId     String                @map("organization_id") @db.Uuid
+  registerId         String                @map("register_id") @db.Uuid
+  branchId           String                @map("branch_id") @db.Uuid
+  openedByUserId     String                @map("opened_by_user_id") @db.Uuid
+  closedByUserId     String?               @map("closed_by_user_id") @db.Uuid
+  status             RegisterSessionStatus @default(OPEN)
+  openingFloat       Decimal               @default(0) @map("opening_float") @db.Decimal(19, 4)
+  closingCountedCash Decimal?              @map("closing_counted_cash") @db.Decimal(19, 4)
+  expectedCash       Decimal?              @map("expected_cash") @db.Decimal(19, 4)
+  variance           Decimal?              @map("variance") @db.Decimal(19, 4)
+  openedAt           DateTime              @default(now()) @map("opened_at") @db.Timestamptz(3)
+  closedAt           DateTime?             @map("closed_at") @db.Timestamptz(3)
+  createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  register     Register     @relation(fields: [registerId], references: [id])
+  branch       Branch       @relation(fields: [branchId], references: [id])
+  openedBy     User         @relation("SessionOpenedBy", fields: [openedByUserId], references: [id])
+  closedBy     User?        @relation("SessionClosedBy", fields: [closedByUserId], references: [id])
+  sales        Sale[]
+
+  @@index([organizationId])
+  @@index([registerId, status])
+  @@index([branchId])
+  @@map("register_sessions")
+}
+
+model User {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  email          String
+  passwordHash   String   @map("password_hash")
+  fullName       String   @map("full_name")
+  pinHash        String?  @map("pin_hash")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization         Organization      @relation(fields: [organizationId], references: [id])
+  userRoles            UserRole[]
+  userBranches         UserBranch[]
+  userPermissions      UserPermission[]
+  sessionsOpened       RegisterSession[] @relation("SessionOpenedBy")
+  sessionsClosed       RegisterSession[] @relation("SessionClosedBy")
+  priceChanges         PriceHistory[]
+  stockMovements       StockMovement[]
+  stockCounts          StockCount[]
+  salesAsCashier       Sale[]            @relation("SaleCashier")
+  heldSales            HeldSale[]
+  returnsProcessed     Return[]          @relation("ReturnProcessedBy")
+  returnsApproved      Return[]          @relation("ReturnApprovedBy")
+  auditLogs            AuditLog[]
+
+  @@unique([organizationId, email])
+  @@index([organizationId])
+  @@map("users")
+}
+
+model Role {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  code           String
+  name           String
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  code        String   @unique
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  rolePermissions RolePermission[]
+  userPermissions UserPermission[]
+
+  @@map("permissions")
+}
+
+/// Per-user GRANT/DENY overrides. Effective = rolePermissions ∪ grants − denies.
+model UserPermission {
+  id             String               @id @default(uuid()) @db.Uuid
+  organizationId String               @map("organization_id") @db.Uuid
+  userId         String               @map("user_id") @db.Uuid
+  permissionId   String               @map("permission_id") @db.Uuid
+  effect         UserPermissionEffect
+  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission   Permission   @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, permissionId])
+  @@index([organizationId])
+  @@index([userId])
+  @@map("user_permissions")
+}
+
+model UserRole {
+  userId String @map("user_id") @db.Uuid
+  roleId String @map("role_id") @db.Uuid
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  roleId       String @map("role_id") @db.Uuid
+  permissionId String @map("permission_id") @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserBranch {
+  userId   String @map("user_id") @db.Uuid
+  branchId String @map("branch_id") @db.Uuid
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@id([userId, branchId])
+  @@map("user_branches")
+}
+
+// ---------------------------------------------------------------------------
+// Catalog (Phase 1)
+// ---------------------------------------------------------------------------
+
+model Brand {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  name           String
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  products     Product[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@map("brands")
+}
+
+model Category {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  name           String
+  parentId       String?  @map("parent_id") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  parent       Category?    @relation("CategoryTree", fields: [parentId], references: [id])
+  children     Category[]   @relation("CategoryTree")
+  products     Product[]
+
+  @@index([organizationId])
+  @@index([parentId])
+  @@map("categories")
+}
+
+model Product {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  brandId        String?  @map("brand_id") @db.Uuid
+  categoryId     String?  @map("category_id") @db.Uuid
+  name           String
+  description    String?
+  imageUrl       String?  @map("image_url")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  brand        Brand?       @relation(fields: [brandId], references: [id])
+  category     Category?    @relation(fields: [categoryId], references: [id])
+  variants     Variant[]
+
+  @@index([organizationId])
+  @@index([brandId])
+  @@index([categoryId])
+  @@map("products")
+}
+
+/// Sellable SKU. Qty lives in StockBalance / StockMovement — never a stock column here.
+model Variant {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  productId      String   @map("product_id") @db.Uuid
+  sku            String
+  name           String
+  attributes     Json     @default("{}")
+  sellPrice      Decimal  @map("sell_price") @db.Decimal(19, 4)
+  costPrice      Decimal  @default(0) @map("cost_price") @db.Decimal(19, 4)
+  taxClass       String?  @map("tax_class")
+  tracksSerial   Boolean  @default(false) @map("tracks_serial")
+  imageUrl       String?  @map("image_url")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  product        Product         @relation(fields: [productId], references: [id])
+  barcodes       Barcode[]
+  priceHistories PriceHistory[]
+  serialUnits    SerialUnit[]
+  stockBalances  StockBalance[]
+  stockMovements StockMovement[]
+  saleItems      SaleItem[]
+
+  @@unique([organizationId, sku])
+  @@index([organizationId])
+  @@index([productId])
+  @@map("variants")
+}
+
+model Barcode {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  variantId      String   @map("variant_id") @db.Uuid
+  symbology      String
+  value          String
+  isPrimary      Boolean  @default(false) @map("is_primary")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  variant      Variant      @relation(fields: [variantId], references: [id])
+
+  @@unique([organizationId, value])
+  @@index([variantId])
+  @@map("barcodes")
+}
+
+model PriceHistory {
+  id              String   @id @default(uuid()) @db.Uuid
+  organizationId  String   @map("organization_id") @db.Uuid
+  variantId       String   @map("variant_id") @db.Uuid
+  sellPrice       Decimal  @map("sell_price") @db.Decimal(19, 4)
+  changedByUserId String   @map("changed_by_user_id") @db.Uuid
+  effectiveAt     DateTime @default(now()) @map("effective_at") @db.Timestamptz(3)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  variant      Variant      @relation(fields: [variantId], references: [id])
+  changedBy    User         @relation(fields: [changedByUserId], references: [id])
+
+  @@index([organizationId])
+  @@index([variantId, effectiveAt])
+  @@map("price_histories")
+}
+
+// ---------------------------------------------------------------------------
+// Inventory (Phase 1) — ledger + balances; no Product.stock
+// ---------------------------------------------------------------------------
+
+/// IMEI / serial tracked unit (SerialNumber entity in domain language).
+model SerialUnit {
+  id                String       @id @default(uuid()) @db.Uuid
+  organizationId    String       @map("organization_id") @db.Uuid
+  variantId         String       @map("variant_id") @db.Uuid
+  warehouseId       String       @map("warehouse_id") @db.Uuid
+  serialNumber      String       @map("serial_number")
+  status            SerialStatus @default(IN_STOCK)
+  currentSaleItemId String?      @map("current_sale_item_id") @db.Uuid
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+  variant         Variant          @relation(fields: [variantId], references: [id])
+  warehouse       Warehouse        @relation(fields: [warehouseId], references: [id])
+  currentSaleItem SaleItem?        @relation("SerialCurrentSaleItem", fields: [currentSaleItemId], references: [id])
+  stockMovements  StockMovement[]
+  saleItemSerials SaleItemSerial[]
+  returnItems     ReturnItem[]
+
+  @@unique([organizationId, serialNumber])
+  @@index([warehouseId, variantId, status])
+  @@index([organizationId])
+  @@map("serial_units")
+}
+
+/// Projected on-hand qty per warehouse × variant. Updated only via movement commits.
+model StockBalance {
+  id                String   @id @default(uuid()) @db.Uuid
+  organizationId    String   @map("organization_id") @db.Uuid
+  warehouseId       String   @map("warehouse_id") @db.Uuid
+  variantId         String   @map("variant_id") @db.Uuid
+  quantityOnHand    Decimal  @default(0) @map("quantity_on_hand") @db.Decimal(19, 4)
+  quantityReserved  Decimal  @default(0) @map("quantity_reserved") @db.Decimal(19, 4)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  warehouse    Warehouse    @relation(fields: [warehouseId], references: [id])
+  variant      Variant      @relation(fields: [variantId], references: [id])
+
+  @@unique([warehouseId, variantId])
+  @@index([organizationId])
+  @@map("stock_balances")
+}
+
+/// Append-only inventory ledger. Never delete or rewrite rows; reverse with new movements.
+model StockMovement {
+  id              String            @id @default(uuid()) @db.Uuid
+  organizationId  String            @map("organization_id") @db.Uuid
+  warehouseId     String            @map("warehouse_id") @db.Uuid
+  variantId       String            @map("variant_id") @db.Uuid
+  movementType    StockMovementType @map("movement_type")
+  quantityDelta   Decimal           @map("quantity_delta") @db.Decimal(19, 4)
+  referenceType   String?           @map("reference_type")
+  referenceId     String?           @map("reference_id") @db.Uuid
+  serialUnitId    String?           @map("serial_unit_id") @db.Uuid
+  createdByUserId String?           @map("created_by_user_id") @db.Uuid
+  reason          String?
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  warehouse    Warehouse    @relation(fields: [warehouseId], references: [id])
+  variant      Variant      @relation(fields: [variantId], references: [id])
+  serialUnit   SerialUnit?  @relation(fields: [serialUnitId], references: [id])
+  createdBy    User?        @relation(fields: [createdByUserId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@index([referenceType, referenceId])
+  @@index([warehouseId, variantId])
+  @@map("stock_movements")
+}
+
+/// Light stock count header (Phase 1). Count lines / adjustments via StockMovement.
+model StockCount {
+  id              String           @id @default(uuid()) @db.Uuid
+  organizationId  String           @map("organization_id") @db.Uuid
+  warehouseId     String           @map("warehouse_id") @db.Uuid
+  status          StockCountStatus @default(DRAFT)
+  createdByUserId String           @map("created_by_user_id") @db.Uuid
+  countedAt       DateTime?        @map("counted_at") @db.Timestamptz(3)
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  warehouse    Warehouse    @relation(fields: [warehouseId], references: [id])
+  createdBy    User         @relation(fields: [createdByUserId], references: [id])
+
+  @@index([organizationId])
+  @@index([warehouseId, status])
+  @@map("stock_counts")
+}
+
+// ---------------------------------------------------------------------------
+// Customers (Phase 1)
+// ---------------------------------------------------------------------------
+
+model Customer {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  name           String
+  phone          String?
+  email          String?
+  notes          String?
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  sales        Sale[]
+
+  @@index([organizationId])
+  @@index([organizationId, phone])
+  @@map("customers")
+}
+
+// ---------------------------------------------------------------------------
+// Sales / payments / returns (Phase 1)
+// ---------------------------------------------------------------------------
+
+model Sale {
+  id                String       @id @default(uuid()) @db.Uuid
+  organizationId    String       @map("organization_id") @db.Uuid
+  branchId          String       @map("branch_id") @db.Uuid
+  warehouseId       String       @map("warehouse_id") @db.Uuid
+  registerId        String       @map("register_id") @db.Uuid
+  registerSessionId String       @map("register_session_id") @db.Uuid
+  cashierUserId     String       @map("cashier_user_id") @db.Uuid
+  customerId        String?      @map("customer_id") @db.Uuid
+  receiptNumber     String       @map("receipt_number")
+  status            SaleStatus   @default(DRAFT)
+  fiscalStatus      FiscalStatus @default(NOT_REQUIRED) @map("fiscal_status")
+  idempotencyKey    String       @map("idempotency_key")
+  subtotal          Decimal      @default(0) @db.Decimal(19, 4)
+  discountTotal     Decimal      @default(0) @map("discount_total") @db.Decimal(19, 4)
+  taxTotal          Decimal      @default(0) @map("tax_total") @db.Decimal(19, 4)
+  grandTotal        Decimal      @default(0) @map("grand_total") @db.Decimal(19, 4)
+  completedAt       DateTime?    @map("completed_at") @db.Timestamptz(3)
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization    Organization    @relation(fields: [organizationId], references: [id])
+  branch          Branch          @relation(fields: [branchId], references: [id])
+  warehouse       Warehouse       @relation(fields: [warehouseId], references: [id])
+  register        Register        @relation(fields: [registerId], references: [id])
+  registerSession RegisterSession @relation(fields: [registerSessionId], references: [id])
+  cashier         User            @relation("SaleCashier", fields: [cashierUserId], references: [id])
+  customer        Customer?       @relation(fields: [customerId], references: [id])
+  items           SaleItem[]
+  payments        Payment[]
+  returns         Return[]
+  fiscalDocument  FiscalDocument?
+
+  @@unique([organizationId, receiptNumber])
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, completedAt])
+  @@index([registerSessionId])
+  @@index([branchId])
+  @@map("sales")
+}
+
+model SaleItem {
+  id             String  @id @default(uuid()) @db.Uuid
+  organizationId String  @map("organization_id") @db.Uuid
+  saleId         String  @map("sale_id") @db.Uuid
+  variantId      String  @map("variant_id") @db.Uuid
+  quantity       Decimal @db.Decimal(19, 4)
+  unitPrice      Decimal @map("unit_price") @db.Decimal(19, 4)
+  discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(19, 4)
+  taxAmount      Decimal @default(0) @map("tax_amount") @db.Decimal(19, 4)
+  lineTotal      Decimal @map("line_total") @db.Decimal(19, 4)
+  tracksSerial   Boolean @default(false) @map("tracks_serial")
+
+  organization        Organization     @relation(fields: [organizationId], references: [id])
+  sale                Sale             @relation(fields: [saleId], references: [id])
+  variant             Variant          @relation(fields: [variantId], references: [id])
+  serials             SaleItemSerial[]
+  currentSerialUnits  SerialUnit[]     @relation("SerialCurrentSaleItem")
+  returnItems         ReturnItem[]
+
+  @@index([organizationId])
+  @@index([saleId])
+  @@index([variantId])
+  @@map("sale_items")
+}
+
+model SaleItemSerial {
+  saleItemId   String @map("sale_item_id") @db.Uuid
+  serialUnitId String @map("serial_unit_id") @db.Uuid
+
+  saleItem   SaleItem   @relation(fields: [saleItemId], references: [id], onDelete: Cascade)
+  serialUnit SerialUnit @relation(fields: [serialUnitId], references: [id])
+
+  @@id([saleItemId, serialUnitId])
+  @@index([serialUnitId])
+  @@map("sale_item_serials")
+}
+
+model Payment {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @map("organization_id") @db.Uuid
+  saleId         String        @map("sale_id") @db.Uuid
+  method         PaymentMethod
+  amount         Decimal       @db.Decimal(19, 4)
+  provider       String?
+  reference      String?
+  paidAt         DateTime      @default(now()) @map("paid_at") @db.Timestamptz(3)
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  sale         Sale         @relation(fields: [saleId], references: [id])
+
+  @@index([saleId])
+  @@index([organizationId])
+  @@map("payments")
+}
+
+model HeldSale {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  registerId     String    @map("register_id") @db.Uuid
+  cashierUserId  String    @map("cashier_user_id") @db.Uuid
+  cartPayload    Json      @map("cart_payload")
+  expiresAt      DateTime? @map("expires_at") @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  register     Register     @relation(fields: [registerId], references: [id])
+  cashier      User         @relation(fields: [cashierUserId], references: [id])
+
+  @@index([organizationId])
+  @@index([registerId])
+  @@map("held_sales")
+}
+
+model Return {
+  id                 String       @id @default(uuid()) @db.Uuid
+  organizationId     String       @map("organization_id") @db.Uuid
+  saleId             String       @map("sale_id") @db.Uuid
+  branchId           String       @map("branch_id") @db.Uuid
+  processedByUserId  String       @map("processed_by_user_id") @db.Uuid
+  approvedByUserId   String?      @map("approved_by_user_id") @db.Uuid
+  status             ReturnStatus @default(PENDING)
+  refundTotal        Decimal      @default(0) @map("refund_total") @db.Decimal(19, 4)
+  reasonCode         String?      @map("reason_code")
+  processedAt        DateTime?    @map("processed_at") @db.Timestamptz(3)
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  sale         Sale         @relation(fields: [saleId], references: [id])
+  branch       Branch       @relation(fields: [branchId], references: [id])
+  processedBy  User         @relation("ReturnProcessedBy", fields: [processedByUserId], references: [id])
+  approvedBy   User?        @relation("ReturnApprovedBy", fields: [approvedByUserId], references: [id])
+  items        ReturnItem[]
+
+  @@index([organizationId])
+  @@index([saleId])
+  @@index([branchId])
+  @@map("returns")
+}
+
+model ReturnItem {
+  id            String            @id @default(uuid()) @db.Uuid
+  returnId      String            @map("return_id") @db.Uuid
+  saleItemId    String            @map("sale_item_id") @db.Uuid
+  serialUnitId  String?           @map("serial_unit_id") @db.Uuid
+  quantity      Decimal           @db.Decimal(19, 4)
+  disposition   ReturnDisposition
+  refundAmount  Decimal           @map("refund_amount") @db.Decimal(19, 4)
+
+  returnDoc  Return      @relation(fields: [returnId], references: [id])
+  saleItem   SaleItem    @relation(fields: [saleItemId], references: [id])
+  serialUnit SerialUnit? @relation(fields: [serialUnitId], references: [id])
+
+  @@index([returnId])
+  @@index([saleItemId])
+  @@map("return_items")
+}
+
+// ---------------------------------------------------------------------------
+// Audit / outbox / fiscal stub (Phase 1)
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  actorUserId    String?  @map("actor_user_id") @db.Uuid
+  action         String
+  entityType     String   @map("entity_type")
+  entityId       String?  @map("entity_id") @db.Uuid
+  beforeJson     Json?    @map("before_json")
+  afterJson      Json?    @map("after_json")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  actor        User?        @relation(fields: [actorUserId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+model OutboxEvent {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  eventType      String       @map("event_type")
+  aggregateId    String       @map("aggregate_id") @db.Uuid
+  payload        Json
+  status         OutboxStatus @default(PENDING)
+  availableAt    DateTime     @default(now()) @map("available_at") @db.Timestamptz(3)
+  processedAt    DateTime?    @map("processed_at") @db.Timestamptz(3)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([status, availableAt])
+  @@index([organizationId])
+  @@map("outbox_events")
+}
+
+/// Fiscal provider stub — sale may be FISCAL_PENDING with idempotent retry.
+model FiscalDocument {
+  id             String               @id @default(uuid()) @db.Uuid
+  organizationId String               @map("organization_id") @db.Uuid
+  saleId         String               @unique @map("sale_id") @db.Uuid
+  provider       String
+  status         FiscalDocumentStatus @default(PENDING)
+  externalRef    String?              @map("external_ref")
+  requestJson    Json?                @map("request_json")
+  responseJson   Json?                @map("response_json")
+  idempotencyKey String               @map("idempotency_key")
+  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  sale         Sale         @relation(fields: [saleId], references: [id])
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId])
+  @@map("fiscal_documents")
+}

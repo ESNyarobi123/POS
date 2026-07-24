@@ -1,0 +1,33 @@
+---
+description: Route work to the correct GulioSmart POS sub-agent by domain/path
+alwaysApply: true
+---
+
+# Sub-agent routing (mandatory)
+
+Before implementing a domain change, **delegate or follow the owning agent**. Do not cross module DB boundaries.
+
+| Area / path | Sub-agent |
+| --- | --- |
+| Requirements, workflows, phasing, PRD | `product-architect` |
+| Design system, tokens, screen UX | `ui-design-agent` |
+| `apps/web/(pos)`, `(scan)`, cart/offline/shortcuts | `frontend-pos-agent` |
+| Products, variants, brands, prices | `catalog-agent` |
+| Stock ledger, transfers, counts, serial status | `inventory-agent` |
+| Barcode/QR/labels/scan helpers | `barcode-agent` |
+| Sales, checkout, refunds, shifts, payments records | `sales-agent` |
+| Suppliers, POs, receiving | `purchasing-agent` |
+| Customers, loyalty, warranty profile | `customer-agent` |
+| Guliosmart sync, VFD/EFD, MM APIs, worker sync | `integration-agent` |
+| Auth, roles, audit, abuse | `security-agent` |
+| Tests / E2E | `qa-agent` |
+| Docker, nginx, backup, monitoring | `devops-agent` |
+
+## Delegation examples
+
+- “Add IMEI on receive” → `purchasing-agent` + `inventory-agent`
+- “POS cart shortcuts” → `frontend-pos-agent` (+ `ui-design-agent` if visual)
+- “Website stock sync” → `integration-agent`
+- “product.stock -= 1” → **reject**; route to `inventory-agent`
+
+Agents live in `.cursor/agents/`. Full memory: root `AGENTS.md`.

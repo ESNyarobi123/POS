@@ -1,0 +1,44 @@
+{
+  "name": "@gulio/api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "predev": "pnpm --filter @gulio/config --filter @gulio/auth --filter @gulio/contracts --filter @gulio/barcode --filter @gulio/printing --filter @gulio/database run build",
+    "dev": "nest start --watch",
+    "prebuild": "pnpm --filter @gulio/config --filter @gulio/auth --filter @gulio/contracts --filter @gulio/barcode --filter @gulio/printing --filter @gulio/database run build",
+    "build": "nest build",
+    "start": "node dist/main.js",
+    "start:prod": "node dist/main.js",
+    "lint": "eslint \"{src,test}/**/*.ts\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@gulio/auth": "workspace:*",
+    "@gulio/barcode": "workspace:*",
+    "@gulio/config": "workspace:*",
+    "@gulio/contracts": "workspace:*",
+    "@gulio/database": "workspace:*",
+    "@gulio/printing": "workspace:*",
+    "@nestjs/common": "^10.4.15",
+    "@nestjs/core": "^10.4.15",
+    "@nestjs/platform-fastify": "^10.4.15",
+    "dotenv": "^16.4.7",
+    "fastify": "^4.28.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@gulio/typescript-config": "workspace:*",
+    "@nestjs/cli": "^10.4.9",
+    "@nestjs/schematics": "^10.2.3",
+    "@nestjs/testing": "^10.4.15",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.7.2"
+  }
+}

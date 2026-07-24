@@ -1,0 +1,23 @@
+{
+  "name": "guliosmart-pos",
+  "private": true,
+  "version": "0.1.0",
+  "description": "GulioSmart Retail POS — Sell smarter. Track everything. Grow everywhere.",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "db:generate": "pnpm --filter @gulio/database generate",
+    "db:migrate": "pnpm --filter @gulio/database migrate",
+    "db:migrate:deploy": "pnpm --filter @gulio/database migrate:deploy",
+    "db:seed": "pnpm --filter @gulio/database db:seed",
+    "db:studio": "pnpm --filter @gulio/database studio",
+    "format": "prettier --write \"**/*.{ts,tsx,md,json}\""
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,17 @@
+---
+description: NestJS module ownership and no cross-module DB access
+globs: apps/api/**/*
+alwaysApply: false
+---
+
+# API module boundaries
+
+Modules under `apps/api/src/modules/*` own their tables via their services only.
+
+- Sales/POS → call `inventoryService` for stock; never write inventory tables directly
+- Purchasing → stock via inventory movements on receive
+- Catalog → product/variant/price data only; stock balances are inventory
+- Integrations → outbox/events; do not block checkout on external HTTP
+- Fiscal → `FiscalProvider`; allow `FISCAL_PENDING` + worker retry
+
+Shared DTOs live in `packages/contracts/<domain>`. Schema in `packages/database` — propose migrations, do not silently reshape unrelated entities.

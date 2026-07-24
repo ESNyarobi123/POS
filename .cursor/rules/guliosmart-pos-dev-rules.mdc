@@ -1,0 +1,37 @@
+---
+description: GulioSmart POS global engineering rules and critical workflows
+alwaysApply: true
+---
+
+# Engineering rules
+
+1. **No direct stock mutation** — only `StockMovement` (PURCHASE_RECEIPT, SALE, RETURN, DAMAGE, TRANSFER_*, ADJUSTMENT).
+2. **Financial immutability** — completed sales: void / refund / reversal / adjustment only.
+3. **Atomic checkout** — sale + items + payments + serials + stock movements in one DB transaction.
+4. **Idempotency** — checkout, payment callbacks, VFD, Guliosmart webhooks.
+5. **No cross-module DB access** — use service interfaces (e.g. `inventoryService.commitSaleMovement()`).
+6. **Audit** discounts, price overrides, refunds, voids, stock adjustments, permission changes, drawer opens, serial reassignment.
+7. **Money** — DB decimal or integer minor units; never float.
+8. **Permissions on backend** — UI checks are not enough.
+9. **Configurable business rules** — no hidden hardcodes for discount/tax/warranty/receipts.
+10. **Tests** — unit + integration + permission + failure paths; E2E for shift→sell→pay→close and receive→IMEI→sell→return and offline sync.
+
+# Critical flows
+
+```text
+Sale: Open shift → scan → variant → IMEI? → pay → ledger ↓ → receipt → fiscal → sync
+Receive: PO → receive → scan IMEI → ledger ↑ → labels → supplier invoice
+Return: receipt → item → reason → refund → stock/serial status (IMEI must match)
+```
+
+# QR / barcode
+
+QR carries product URL/id only — **never price as source of truth**. Scan fetches live price.
+
+# Phasing
+
+Ship MVP first (auth, shifts, catalog/variants, barcode/labels, IMEI, POS checkout, cash/manual MM, ledger, customers, receipts, returns, basic reports, Docker, audit). Suppliers/sync/VFD/loyalty = Phase 2. AI only as owner assistant, never on checkout path.
+
+# Before full coding
+
+PRD + clickable UI prototype + approved ERD + client integration assessment (Guliosmart access, printers, scanners, VFD).

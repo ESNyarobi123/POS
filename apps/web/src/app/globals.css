@@ -1,0 +1,168 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Palette (AGENTS.md UI / UX) — locked app chrome; do not purple-theme the shell */
+  --gulio-bg: #f8fafc;
+  --gulio-card: #ffffff;
+  --gulio-text: #0f172a;
+  --gulio-muted: #64748b;
+  --gulio-border: #e2e8f0;
+  --gulio-primary: #0d9488;
+  --gulio-primary-hover: #0f766e;
+  --gulio-success: #16a34a;
+  --gulio-warn: #f59e0b;
+  --gulio-error: #dc2626;
+
+  /* POS layout / type */
+  --gulio-radius: 0.75rem;
+  --gulio-touch-min: 2.75rem; /* 44px — minimum touch target */
+  --gulio-cart-total: 2.5rem; /* 40px — cart total (36–40px range) */
+
+  /*
+   * Back Office nav accents — icon tiles ONLY (not page bg / sidebar fill).
+   * Use with .bo-nav-icon--* modifiers. Keeps shell on locked palette.
+   * teal=primary, slate=neutral ops, sky=catalog, amber=alerts/purchasing,
+   * emerald=inventory/stock, rose=destructive/refunds (sparingly).
+   */
+  --bo-nav-teal: #0d9488;
+  --bo-nav-slate: #475569;
+  --bo-nav-sky: #0284c7;
+  --bo-nav-amber: #d97706;
+  --bo-nav-emerald: #059669;
+  --bo-nav-rose: #e11d48;
+  --bo-sidebar-width: 16rem;
+  --bo-sidebar-collapsed: 4.5rem;
+  --bo-sidebar-duration: 200ms;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--gulio-bg);
+  color: var(--gulio-text);
+}
+
+@layer components {
+  /* White surface card used on register / backoffice surfaces */
+  .pos-card {
+    border-radius: var(--gulio-radius);
+    border: 1px solid var(--gulio-border);
+    background: var(--gulio-card);
+    box-shadow: 0 1px 2px rgb(15 23 42 / 0.04);
+  }
+
+  /* Line / tile prices — tabular, medium-bold */
+  .pos-price {
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    color: var(--gulio-text);
+  }
+
+  /* Minimum 44×44 touch target for cashier controls */
+  .touch-target {
+    min-height: var(--gulio-touch-min);
+    min-width: var(--gulio-touch-min);
+  }
+
+  /*
+   * Back Office sidebar shell — width/collapse transitions only.
+   * Fill stays --gulio-card / --gulio-border; accents live on .bo-nav-icon.
+   */
+  .bo-sidebar {
+    width: var(--bo-sidebar-width);
+    background: var(--gulio-card);
+    border-right: 1px solid var(--gulio-border);
+    transition:
+      width var(--bo-sidebar-duration) ease,
+      min-width var(--bo-sidebar-duration) ease,
+      transform var(--bo-sidebar-duration) ease,
+      padding var(--bo-sidebar-duration) ease;
+  }
+
+  .bo-sidebar[data-collapsed="true"],
+  .bo-sidebar.is-collapsed {
+    width: var(--bo-sidebar-collapsed);
+    min-width: var(--bo-sidebar-collapsed);
+  }
+
+  /* Scrollable nav without visible scrollbar (all BO roles) */
+  .bo-sidebar-nav {
+    overflow-y: auto;
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* legacy Edge */
+  }
+
+  .bo-sidebar-nav::-webkit-scrollbar {
+    display: none; /* Chrome / Safari */
+    width: 0;
+    height: 0;
+  }
+
+  /* Colored icon tile for BO nav items — set accent via --bo-nav-accent or modifiers */
+  .bo-nav-icon {
+    --bo-nav-accent: var(--bo-nav-teal);
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.5rem;
+    background: color-mix(in srgb, var(--bo-nav-accent) 14%, white);
+    color: var(--bo-nav-accent);
+    transition:
+      background-color var(--bo-sidebar-duration) ease,
+      color var(--bo-sidebar-duration) ease,
+      transform var(--bo-sidebar-duration) ease;
+  }
+
+  .bo-nav-icon--teal {
+    --bo-nav-accent: var(--bo-nav-teal);
+  }
+  .bo-nav-icon--slate {
+    --bo-nav-accent: var(--bo-nav-slate);
+  }
+  .bo-nav-icon--sky {
+    --bo-nav-accent: var(--bo-nav-sky);
+  }
+  .bo-nav-icon--amber {
+    --bo-nav-accent: var(--bo-nav-amber);
+  }
+  .bo-nav-icon--emerald {
+    --bo-nav-accent: var(--bo-nav-emerald);
+  }
+  .bo-nav-icon--rose {
+    --bo-nav-accent: var(--bo-nav-rose);
+  }
+}
+
+@layer utilities {
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Cart grand total — 40px bold (text-cart-total also in Tailwind theme) */
+  .text-cart-total {
+    font-size: var(--gulio-cart-total);
+    line-height: 1.1;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Product insight dock selection enter */
+  @keyframes productDockIn {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+}

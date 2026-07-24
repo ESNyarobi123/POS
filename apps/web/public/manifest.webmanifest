@@ -1,0 +1,10 @@
+{
+  "name": "GulioSmart Retail POS",
+  "short_name": "GulioPOS",
+  "description": "GulioSmart Retail POS — clickable prototype",
+  "start_url": "/pos",
+  "display": "standalone",
+  "background_color": "#F8FAFC",
+  "theme_color": "#0D9488",
+  "icons": []
+}

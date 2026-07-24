@@ -1,0 +1,19 @@
+---
+description: POS / scanner frontend conventions
+globs: apps/web/**/*
+alwaysApply: false
+---
+
+# Web app conventions
+
+Route groups:
+- `(auth)` login
+- `(pos)` cashier register
+- `(backoffice)` manager
+- `(scan)` mobile scanner pages
+
+POS UX: cart right, scanner-ready search, large total, F2/F4/F6/F8/F9 shortcuts, Inter + tabular-nums.
+
+Offline: cash + catalog/cart only; queue sync; no new online/MM pay offline.
+
+Use `@gulio/ui` and `@gulio/contracts`. Do not treat client stock as source of truth.

@@ -1,0 +1,41 @@
+# GulioSmart POS — Next.js PWA
+FROM node:20-bookworm-slim AS base
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+WORKDIR /app
+
+FROM base AS deps
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
+COPY packages ./packages
+COPY apps/web ./apps/web
+COPY apps/api/package.json ./apps/api/package.json
+COPY apps/worker/package.json ./apps/worker/package.json
+RUN pnpm install --frozen-lockfile
+
+FROM deps AS build
+ARG NEXT_PUBLIC_API_URL=http://localhost:4010
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_TELEMETRY_DISABLED=1
+# @gulio/ui is source-consumed via Next transpilePackages — no tsc build needed
+RUN pnpm --filter @gulio/contracts build \
+  && pnpm --filter @gulio/config build \
+  && pnpm --filter @gulio/web build
+
+FROM node:20-bookworm-slim AS runner
+RUN groupadd -r gulio && useradd -r -g gulio gulio
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+ENV NEXT_TELEMETRY_DISABLED=1
+
+COPY --from=build /app/apps/web/public ./apps/web/public
+COPY --from=build /app/apps/web/.next/standalone ./
+COPY --from=build /app/apps/web/.next/static ./apps/web/.next/static
+
+RUN chown -R gulio:gulio /app
+USER gulio
+EXPOSE 3000
+CMD ["node", "apps/web/server.js"]
