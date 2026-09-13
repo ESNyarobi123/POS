@@ -1,6 +1,6 @@
 # GulioSmart POS — production (OPTICEDGE / VPS)
 # Usage: docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
-name: guliosmart-pos
+name: POS
 
 services:
   postgres:

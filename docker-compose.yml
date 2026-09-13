@@ -1,6 +1,6 @@
 # GulioSmart Retail POS — full local stack
 # Host ports chosen to avoid common clashes (Redis 6379 → 6380)
-name: guliosmart-pos
+name: POS
 
 services:
   postgres:
@@ -39,7 +39,7 @@ services:
       - gulio
 
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -75,8 +75,8 @@ services:
     environment:
       NODE_ENV: production
       API_PORT: "4000"
-      WEB_URL: http://localhost:3010
-      CORS_ORIGINS: http://127.0.0.1:3010,http://localhost:3010
+      WEB_URL: http://localhost:3015
+      CORS_ORIGINS: http://127.0.0.1:3015,http://localhost:3015
       DATABASE_URL: postgresql://gulio:gulio@postgres:5432/guliosmart_pos?schema=public
       REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET:-gulio-docker-dev-secret-change-me}
@@ -89,7 +89,7 @@ services:
       FISCAL_PROVIDER: mock
       RUN_SEED: "true"
     ports:
-      - "4010:4000"
+      - "4015:4000"
     healthcheck:
       test:
         [
@@ -141,7 +141,7 @@ services:
       PORT: "3000"
       HOSTNAME: 0.0.0.0
     ports:
-      - "3010:3000"
+      - "3015:3000"
     networks:
       - gulio
 

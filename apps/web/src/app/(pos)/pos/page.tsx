@@ -99,6 +99,7 @@ export default function PosPage() {
   const [error, setError] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isLoaded, setIsLoaded] = useState(false);
   const [lookupBusy, setLookupBusy] = useState(false);
   const [serialPick, setSerialPick] = useState<SerialPickState | null>(null);
   const [customerOpen, setCustomerOpen] = useState(false);
@@ -136,6 +137,7 @@ export default function PosPage() {
     setCustomer(loadCustomer());
     setDiscountAmount(loadDiscountAmount());
     setHeldSales(loadHeldSales());
+    setIsLoaded(true);
   }, [ready, token, shift, router]);
 
   useEffect(() => {
@@ -164,20 +166,20 @@ export default function PosPage() {
   }, [ready, token, shift]);
 
   useEffect(() => {
-    saveCart(cart);
-  }, [cart]);
+    if (isLoaded) saveCart(cart);
+  }, [cart, isLoaded]);
 
   useEffect(() => {
-    saveCustomer(customer);
-  }, [customer]);
+    if (isLoaded) saveCustomer(customer);
+  }, [customer, isLoaded]);
 
   useEffect(() => {
-    saveDiscountAmount(discountAmount);
-  }, [discountAmount]);
+    if (isLoaded) saveDiscountAmount(discountAmount);
+  }, [discountAmount, isLoaded]);
 
   useEffect(() => {
-    saveHeldSales(heldSales);
-  }, [heldSales]);
+    if (isLoaded) saveHeldSales(heldSales);
+  }, [heldSales, isLoaded]);
 
   const categories = useMemo(() => {
     const names = new Set<string>();

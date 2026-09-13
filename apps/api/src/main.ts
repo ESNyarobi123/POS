@@ -7,6 +7,8 @@ import {
   NestFastifyApplication,
 } from "@nestjs/platform-fastify";
 import { loadEnv } from "@gulio/config";
+import helmet from "@fastify/helmet";
+import { Logger } from "nestjs-pino";
 import { AppModule } from "./app.module";
 
 // Load monorepo root `.env` when present (secrets stay out of Git).
@@ -17,8 +19,12 @@ async function bootstrap() {
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
-    new FastifyAdapter({ logger: env.NODE_ENV === "development" }),
+    new FastifyAdapter(),
+    { bufferLogs: true }
   );
+  
+  app.useLogger(app.get(Logger));
+  await app.register(helmet as any);
 
   // Comma-separated WEB_URL / CORS_ORIGINS — local web often runs on 3000 or 3010
   const corsOrigins = [
