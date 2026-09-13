@@ -1,6 +1,9 @@
 # GulioSmart POS — production edge for tz.pos.guliosmart.com
 # Let's Encrypt on HTTPS. HTTP also served (no forced redirect) so Cloudflare
 # "Flexible" does not loop; set Cloudflare SSL/TLS to Full (strict) in prod.
+#
+# Upstream aliases (guliosmart-web / guliosmart-api) are set in docker-compose.prod.yml
+# so another stack on the same Docker network cannot steal the generic "web" DNS name.
 
 {
 	email admin@guliosmart.com
@@ -14,11 +17,11 @@ http://{$PUBLIC_HOST} {
 	encode gzip
 
 	handle_path /api/* {
-		reverse_proxy api:4000
+		reverse_proxy guliosmart-api:4000
 	}
 
 	handle {
-		reverse_proxy web:3000
+		reverse_proxy guliosmart-web:3000
 	}
 }
 
@@ -26,10 +29,10 @@ https://{$PUBLIC_HOST} {
 	encode gzip
 
 	handle_path /api/* {
-		reverse_proxy api:4000
+		reverse_proxy guliosmart-api:4000
 	}
 
 	handle {
-		reverse_proxy web:3000
+		reverse_proxy guliosmart-web:3000
 	}
 }
