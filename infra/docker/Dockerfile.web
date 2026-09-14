@@ -19,8 +19,10 @@ ARG NEXT_PUBLIC_API_URL=http://localhost:4015
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 # @gulio/ui is source-consumed via Next transpilePackages — no tsc build needed
+# @gulio/barcode exports dist/ (same as contracts/config), so build it first.
 RUN pnpm --filter @gulio/contracts build \
   && pnpm --filter @gulio/config build \
+  && pnpm --filter @gulio/barcode build \
   && pnpm --filter @gulio/web build
 
 FROM node:20-bookworm-slim AS runner
