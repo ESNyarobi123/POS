@@ -3,20 +3,29 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
+import {
+  buildInternalCode128,
+  buildLabelQrPayload,
+  parseLabelQrPayload,
+} from "@gulio/barcode";
 import type {
   BrandDto,
   BrandListResponse,
   CategoryDto,
   CategoryListResponse,
   DecimalString,
+  EnsureVariantBarcodeResponse,
   ProductListItemDto,
   ProductListResponse,
   StockHintDto,
+  UpdateProductRequest,
   VariantDetailDto,
   VariantLookupResponse,
   VariantSummaryDto,
 } from "@gulio/contracts";
 import { Prisma } from "@gulio/database";
+import { AuditService } from "../audit/audit.service";
+import type { RequestUser } from "../auth/types/request-user";
 import { PrismaService } from "../../prisma/prisma.service";
 
 const DEFAULT_PRODUCT_LIMIT = 50;
@@ -176,9 +185,26 @@ const variantInclude = {
   },
 } satisfies Prisma.VariantInclude;
 
+const productDetailInclude = {
+  brand: true,
+  category: true,
+  variants: {
+    where: { isActive: true },
+    include: {
+      barcodes: {
+        orderBy: [{ isPrimary: "desc" as const }, { value: "asc" as const }],
+      },
+    },
+    orderBy: { sku: "asc" as const },
+  },
+} satisfies Prisma.ProductInclude;
+
 @Injectable()
 export class CatalogService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   async listProducts(
     organizationId: string,
@@ -242,6 +268,122 @@ export class CatalogService {
     return { items: rows.map(mapProductListItem) };
   }
 
+  async getProductById(
+    organizationId: string,
+    productId: string,
+  ): Promise<ProductListItemDto> {
+    const row = await this.prisma.product.findFirst({
+      where: { id: productId, organizationId },
+      include: productDetailInclude,
+    });
+    if (!row) {
+      throw new NotFoundException("Product not found");
+    }
+    return mapProductListItem(row);
+  }
+
+  async updateProduct(
+    user: RequestUser,
+    productId: string,
+    body: UpdateProductRequest,
+  ): Promise<ProductListItemDto> {
+    const existing = await this.prisma.product.findFirst({
+      where: { id: productId, organizationId: user.organizationId },
+    });
+    if (!existing) {
+      throw new NotFoundException("Product not found");
+    }
+
+    const name = body.name?.trim();
+    if (body.name !== undefined && !name) {
+      throw new BadRequestException("name cannot be empty");
+    }
+
+    const updated = await this.prisma.product.update({
+      where: { id: existing.id },
+      data: {
+        ...(name !== undefined ? { name } : {}),
+        ...(body.description !== undefined
+          ? { description: body.description?.trim() || null }
+          : {}),
+        ...(body.imageUrl !== undefined
+          ? { imageUrl: body.imageUrl?.trim() || null }
+          : {}),
+      },
+      include: productDetailInclude,
+    });
+
+    await this.audit.log({
+      action: "catalog.product.update",
+      entityType: "Product",
+      entityId: updated.id,
+      userId: user.userId,
+      orgId: user.organizationId,
+      before: {
+        name: existing.name,
+        description: existing.description,
+        imageUrl: existing.imageUrl,
+      },
+      meta: {
+        name: updated.name,
+        description: updated.description,
+        imageUrl: updated.imageUrl,
+      },
+    });
+
+    return mapProductListItem(updated);
+  }
+
+  async archiveProduct(
+    user: RequestUser,
+    productId: string,
+  ): Promise<ProductListItemDto> {
+    const existing = await this.prisma.product.findFirst({
+      where: { id: productId, organizationId: user.organizationId },
+    });
+    if (!existing) {
+      throw new NotFoundException("Product not found");
+    }
+    if (!existing.isActive) {
+      return this.getProductById(user.organizationId, productId);
+    }
+
+    const archived = await this.prisma.$transaction(async (tx) => {
+      await tx.variant.updateMany({
+        where: { productId: existing.id, organizationId: user.organizationId },
+        data: { isActive: false },
+      });
+      return tx.product.update({
+        where: { id: existing.id },
+        data: { isActive: false },
+        include: {
+          brand: true,
+          category: true,
+          variants: {
+            include: {
+              barcodes: {
+                orderBy: [{ isPrimary: "desc" }, { value: "asc" }],
+              },
+            },
+            orderBy: { sku: "asc" },
+          },
+        },
+      });
+    });
+
+    await this.audit.log({
+      action: "catalog.product.archive",
+      entityType: "Product",
+      entityId: archived.id,
+      userId: user.userId,
+      orgId: user.organizationId,
+      before: { isActive: true, name: existing.name },
+      meta: { isActive: false, name: archived.name },
+    });
+
+    return mapProductListItem(archived);
+  }
+
   async lookupVariantByCode(
     organizationId: string,
     code: string,
@@ -250,6 +392,27 @@ export class CatalogService {
     const trimmed = code?.trim();
     if (!trimmed) {
       throw new BadRequestException("code is required");
+    }
+
+    const qr = parseLabelQrPayload(trimmed);
+    if (qr) {
+      const byQr = await this.prisma.variant.findFirst({
+        where: { id: qr.variantId, organizationId },
+        include: variantInclude,
+      });
+      if (!byQr) {
+        throw new NotFoundException(`No variant for code: ${trimmed}`);
+      }
+      return {
+        variant: mapVariantDetail(byQr, byQr.product),
+        matchedBy: "qr",
+        matchedCode: trimmed,
+        stockHint: await this.buildStockHint(
+          organizationId,
+          byQr.id,
+          warehouseId,
+        ),
+      };
     }
 
     const byBarcode = await this.prisma.barcode.findFirst({
@@ -315,6 +478,118 @@ export class CatalogService {
       throw new NotFoundException("Variant not found");
     }
     return mapVariantDetail(variant, variant.product);
+  }
+
+  /**
+   * Prefer existing primary (or any) barcode; otherwise create internal CODE128.
+   * QR payload is returned for printing but not stored as a barcode row.
+   */
+  async ensurePrimaryBarcode(
+    organizationId: string,
+    variantId: string,
+  ): Promise<EnsureVariantBarcodeResponse> {
+    const variant = await this.prisma.variant.findFirst({
+      where: { id: variantId, organizationId },
+      include: {
+        barcodes: {
+          orderBy: [{ isPrimary: "desc" }, { value: "asc" }],
+        },
+      },
+    });
+    if (!variant) {
+      throw new NotFoundException("Variant not found");
+    }
+
+    const existing =
+      variant.barcodes.find((b) => b.isPrimary) ?? variant.barcodes[0];
+    if (existing) {
+      return {
+        variantId: variant.id,
+        barcode: {
+          id: existing.id,
+          symbology: existing.symbology,
+          value: existing.value,
+          isPrimary: existing.isPrimary,
+          created: false,
+        },
+        qrPayload: buildLabelQrPayload(variant.id),
+      };
+    }
+
+    const candidates = [
+      buildInternalCode128(variant.sku),
+      `GUL-${buildInternalCode128(variant.sku).replace(/^GUL-/, "")}-${variant.id.slice(0, 8).toUpperCase()}`,
+    ];
+    // Deduplicate if sku already produced a GUL- value
+    const uniqueCandidates = [...new Set(candidates)];
+
+    let created: BarcodeRow | null = null;
+    let lastError: unknown;
+    for (const value of uniqueCandidates) {
+      try {
+        created = await this.prisma.barcode.create({
+          data: {
+            organizationId,
+            variantId: variant.id,
+            symbology: "CODE128",
+            value,
+            isPrimary: true,
+          },
+          select: {
+            id: true,
+            symbology: true,
+            value: true,
+            isPrimary: true,
+          },
+        });
+        break;
+      } catch (err) {
+        lastError = err;
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === "P2002"
+        ) {
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    if (!created) {
+      // Race: another request may have inserted meanwhile — re-read.
+      const refreshed = await this.prisma.barcode.findFirst({
+        where: { organizationId, variantId: variant.id },
+        orderBy: [{ isPrimary: "desc" }, { value: "asc" }],
+      });
+      if (refreshed) {
+        return {
+          variantId: variant.id,
+          barcode: {
+            id: refreshed.id,
+            symbology: refreshed.symbology,
+            value: refreshed.value,
+            isPrimary: refreshed.isPrimary,
+            created: false,
+          },
+          qrPayload: buildLabelQrPayload(variant.id),
+        };
+      }
+      throw lastError instanceof Error
+        ? lastError
+        : new BadRequestException("Could not allocate unique barcode");
+    }
+
+    return {
+      variantId: variant.id,
+      barcode: {
+        id: created.id,
+        symbology: created.symbology,
+        value: created.value,
+        isPrimary: created.isPrimary,
+        created: true,
+      },
+      qrPayload: buildLabelQrPayload(variant.id),
+    };
   }
 
   async listCategories(organizationId: string): Promise<CategoryListResponse> {

@@ -2,7 +2,7 @@
 
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ||
-  "http://localhost:4010";
+  "http://localhost:4015";
 
 export const TOKEN_STORAGE_KEY = "gulio_access_token";
 

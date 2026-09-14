@@ -11,15 +11,23 @@
     "test": "echo \"web tests: pending\""
   },
   "dependencies": {
+    "@gulio/barcode": "workspace:^",
     "@gulio/config": "workspace:*",
     "@gulio/contracts": "workspace:*",
     "@gulio/ui": "workspace:*",
+    "@heroui/react": "^2.8.10",
+    "framer-motion": "^13.2.0",
+    "jsbarcode": "^3.12.3",
+    "lucide-react": "^1.45.0",
     "next": "^15.1.0",
+    "qrcode": "^1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@types/jsbarcode": "^3.11.4",
     "@types/node": "^22.10.0",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "autoprefixer": "^10.4.20",

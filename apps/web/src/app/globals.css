@@ -141,6 +141,30 @@ body {
   }
 }
 
+/* HeroUI modals — force opaque surfaces (theme content can render transparent). */
+div[role="dialog"],
+[data-slot="base"][role="dialog"],
+section[role="dialog"] {
+  background-color: #ffffff !important;
+  background-image: none !important;
+  opacity: 1 !important;
+}
+
+div[role="dialog"] [data-slot="header"],
+div[role="dialog"] [data-slot="body"],
+div[role="dialog"] [data-slot="footer"],
+section[role="dialog"] [data-slot="header"],
+section[role="dialog"] [data-slot="body"],
+section[role="dialog"] [data-slot="footer"] {
+  background-color: #ffffff !important;
+}
+
+/* Dim page behind modal so the form stands out */
+[data-slot="backdrop"] {
+  background-color: rgb(15 23 42 / 0.5) !important;
+  backdrop-filter: blur(2px);
+}
+
 @layer utilities {
   .tabular-nums {
     font-variant-numeric: tabular-nums;
@@ -164,5 +188,34 @@ body {
       opacity: 1;
       transform: translateY(0);
     }
+  }
+}
+
+/* Label printing — hide chrome, show label sheet only */
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+
+  .labels-print-only,
+  .labels-print-only * {
+    visibility: visible !important;
+  }
+
+  .labels-print-only {
+    display: block !important;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
+
+  .labels-no-print {
+    display: none !important;
+  }
+
+  .label-sheet-item {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 }

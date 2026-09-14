@@ -13,10 +13,13 @@ import {
   type SerialUnit,
 } from "@gulio/database";
 import type {
+  CommitAdjustmentInput,
+  CommitAdjustmentResult,
   CommitReturnMovementInput,
   CommitReturnMovementResult,
   CommitSaleMovementInput,
   CommitSaleMovementResult,
+  CreateStockAdjustmentRequest,
   DecimalString,
   SerialStatus as ContractSerialStatus,
   SerialUnitDto,
@@ -25,6 +28,8 @@ import type {
   StockMovementType as ContractMovementType,
 } from "@gulio/contracts";
 import { PrismaService } from "../../prisma/prisma.service";
+import { AuditService } from "../audit/audit.service";
+import type { RequestUser } from "../auth/types/request-user";
 
 /** Interactive transaction client passed by sales checkout / returns. */
 export type InventoryTx = Prisma.TransactionClient;
@@ -92,7 +97,10 @@ function mapSerial(row: SerialUnit): SerialUnitDto {
 
 @Injectable()
 export class InventoryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   /**
    * Append SALE ledger row(s), decrement StockBalance, mark serials SOLD.
@@ -343,13 +351,218 @@ export class InventoryService {
     };
   }
 
+  /**
+   * Path A MVP stock intake / write-down via ADJUSTMENT ledger rows.
+   * Serial-tracked write-downs are rejected — use returns instead.
+   */
+  async commitAdjustment(
+    tx: InventoryTx,
+    input: CommitAdjustmentInput,
+  ): Promise<CommitAdjustmentResult> {
+    const quantityDelta = toDecimal(input.quantityDelta);
+    if (quantityDelta.equals(0)) {
+      throw new BadRequestException("quantityDelta must not be zero");
+    }
+
+    const reason = input.reason?.trim() ?? "";
+    if (reason.length < 3) {
+      throw new BadRequestException("reason must be at least 3 characters");
+    }
+
+    const variant = await tx.variant.findFirst({
+      where: {
+        id: input.variantId,
+        organizationId: input.organizationId,
+      },
+    });
+    if (!variant) {
+      throw new NotFoundException(`Variant ${input.variantId} not found`);
+    }
+
+    const absDelta = quantityDelta.abs();
+    const movements: StockMovement[] = [];
+    const serials: SerialUnit[] = [];
+
+    if (variant.tracksSerial) {
+      if (quantityDelta.lt(0)) {
+        throw new BadRequestException(
+          "Serial-tracked write-downs via adjustment are not supported; use returns",
+        );
+      }
+
+      const serialNumbers = (input.serialNumbers ?? [])
+        .map((s: string) => s.trim())
+        .filter(Boolean);
+      if (!absDelta.equals(serialNumbers.length)) {
+        throw new BadRequestException(
+          "serialNumbers length must equal quantityDelta for serial-tracked intake",
+        );
+      }
+
+      const uniqueSerials = new Set(
+        serialNumbers.map((s: string) => s.toUpperCase()),
+      );
+      if (uniqueSerials.size !== serialNumbers.length) {
+        throw new BadRequestException("serialNumbers must be unique");
+      }
+
+      for (const serialNumber of serialNumbers) {
+        const serial = await tx.serialUnit.create({
+          data: {
+            organizationId: input.organizationId,
+            variantId: input.variantId,
+            warehouseId: input.warehouseId,
+            serialNumber,
+            status: SerialStatus.IN_STOCK,
+          },
+        });
+        serials.push(serial);
+
+        const movement = await tx.stockMovement.create({
+          data: {
+            organizationId: input.organizationId,
+            warehouseId: input.warehouseId,
+            variantId: input.variantId,
+            movementType: StockMovementType.ADJUSTMENT,
+            quantityDelta: new Prisma.Decimal(1),
+            referenceType: input.referenceType,
+            referenceId: input.referenceId,
+            serialUnitId: serial.id,
+            createdByUserId: input.createdByUserId,
+            reason,
+          },
+        });
+        movements.push(movement);
+      }
+    } else {
+      const movement = await tx.stockMovement.create({
+        data: {
+          organizationId: input.organizationId,
+          warehouseId: input.warehouseId,
+          variantId: input.variantId,
+          movementType: StockMovementType.ADJUSTMENT,
+          quantityDelta,
+          referenceType: input.referenceType,
+          referenceId: input.referenceId,
+          createdByUserId: input.createdByUserId,
+          reason,
+        },
+      });
+      movements.push(movement);
+    }
+
+    let balance: StockBalance;
+    if (quantityDelta.gt(0)) {
+      balance = await this.ensureBalance(
+        tx,
+        input.organizationId,
+        input.warehouseId,
+        input.variantId,
+      );
+      balance = await tx.stockBalance.update({
+        where: { id: balance.id },
+        data: {
+          quantityOnHand: { increment: absDelta },
+        },
+      });
+    } else {
+      balance = await this.lockBalance(
+        tx,
+        input.organizationId,
+        input.warehouseId,
+        input.variantId,
+      );
+      const available = availableQty(balance);
+      if (available.lt(absDelta)) {
+        throw new UnprocessableEntityException({
+          code: "INSUFFICIENT_STOCK",
+          message: `Insufficient stock for variant ${input.variantId}`,
+          available: toDecimalString(available),
+          requested: toDecimalString(absDelta),
+        });
+      }
+      balance = await tx.stockBalance.update({
+        where: { id: balance.id },
+        data: {
+          quantityOnHand: { decrement: absDelta },
+        },
+      });
+    }
+
+    return {
+      movements: movements.map(mapMovement),
+      balance: mapBalance(balance),
+      serials: serials.map(mapSerial),
+    };
+  }
+
+  /**
+   * Org-scoped stock adjustment (Path A intake / non-serial write-down).
+   */
+  async createAdjustment(
+    user: RequestUser,
+    body: CreateStockAdjustmentRequest,
+  ): Promise<CommitAdjustmentResult> {
+    const warehouse = await this.prisma.warehouse.findFirst({
+      where: {
+        id: body.warehouseId,
+        organizationId: user.organizationId,
+      },
+    });
+    if (!warehouse) {
+      throw new NotFoundException("Warehouse not found");
+    }
+
+    const variant = await this.prisma.variant.findFirst({
+      where: {
+        id: body.variantId,
+        organizationId: user.organizationId,
+      },
+    });
+    if (!variant) {
+      throw new NotFoundException("Variant not found");
+    }
+
+    const result = await this.prisma.$transaction(async (tx) =>
+      this.commitAdjustment(tx, {
+        organizationId: user.organizationId,
+        warehouseId: body.warehouseId,
+        variantId: body.variantId,
+        quantityDelta: body.quantityDelta,
+        reason: body.reason,
+        serialNumbers: body.serialNumbers,
+        createdByUserId: user.userId,
+        referenceType: "StockAdjustment",
+      }),
+    );
+
+    await this.audit.log({
+      action: "stock.adjustment",
+      entityType: "StockBalance",
+      entityId: result.balance.id,
+      userId: user.userId,
+      orgId: user.organizationId,
+      meta: {
+        warehouseId: body.warehouseId,
+        variantId: body.variantId,
+        quantityDelta: body.quantityDelta,
+        reason: body.reason.trim(),
+        serialNumbers: body.serialNumbers ?? [],
+        movementIds: result.movements.map((m: { id: string }) => m.id),
+      },
+    });
+
+    return result;
+  }
+
   async listAvailableSerials(
+    organizationId: string,
     variantId: string,
     warehouseId: string,
     status: SerialStatus = SerialStatus.IN_STOCK,
   ): Promise<SerialUnitDto[]> {
     const rows = await this.prisma.serialUnit.findMany({
-      where: { variantId, warehouseId, status },
+      where: { organizationId, variantId, warehouseId, status },
       orderBy: { serialNumber: "asc" },
     });
     return rows.map(mapSerial);
@@ -367,9 +580,12 @@ export class InventoryService {
     return row ? mapBalance(row) : null;
   }
 
-  async listBalances(warehouseId: string): Promise<StockBalanceDto[]> {
+  async listBalances(
+    organizationId: string,
+    warehouseId: string,
+  ): Promise<StockBalanceDto[]> {
     const rows = await this.prisma.stockBalance.findMany({
-      where: { warehouseId },
+      where: { organizationId, warehouseId },
       orderBy: { variantId: "asc" },
     });
     return rows.map(mapBalance);

@@ -13,41 +13,114 @@ type MockBalance = {
   updatedAt: Date;
 };
 
-function createTxMock(initial: MockBalance) {
-  let balance = { ...initial };
+function createTxMock(
+  initial: MockBalance | null,
+  options?: {
+    tracksSerial?: boolean;
+    variantId?: string;
+    organizationId?: string;
+  },
+) {
+  let balance = initial ? { ...initial } : null;
   const movements: Array<Record<string, unknown>> = [];
+  const serials: Array<Record<string, unknown>> = [];
+  const variantId =
+    options?.variantId ??
+    initial?.variantId ??
+    "44444444-4444-4444-4444-444444444444";
+  const organizationId =
+    options?.organizationId ??
+    initial?.organizationId ??
+    "11111111-1111-1111-1111-111111111111";
 
   const tx = {
+    variant: {
+      findFirst: jest.fn(async () => ({
+        id: variantId,
+        organizationId,
+        tracksSerial: options?.tracksSerial ?? false,
+      })),
+    },
     stockBalance: {
-      findUnique: jest.fn(async ({ where }: { where: { id?: string; warehouseId_variantId?: { warehouseId: string; variantId: string } } }) => {
-        if (where.id && where.id === balance.id) return { ...balance };
-        if (
-          where.warehouseId_variantId &&
-          where.warehouseId_variantId.warehouseId === balance.warehouseId &&
-          where.warehouseId_variantId.variantId === balance.variantId
-        ) {
+      findUnique: jest.fn(
+        async ({
+          where,
+        }: {
+          where: {
+            id?: string;
+            warehouseId_variantId?: { warehouseId: string; variantId: string };
+          };
+        }) => {
+          if (!balance) return null;
+          if (where.id && where.id === balance.id) return { ...balance };
+          if (
+            where.warehouseId_variantId &&
+            where.warehouseId_variantId.warehouseId === balance.warehouseId &&
+            where.warehouseId_variantId.variantId === balance.variantId
+          ) {
+            return { ...balance };
+          }
+          return null;
+        },
+      ),
+      update: jest.fn(
+        async ({
+          data,
+        }: {
+          data: {
+            quantityOnHand: {
+              decrement?: Prisma.Decimal;
+              increment?: Prisma.Decimal;
+            };
+          };
+        }) => {
+          if (!balance) throw new Error("no balance");
+          if (data.quantityOnHand?.decrement) {
+            balance = {
+              ...balance,
+              quantityOnHand: balance.quantityOnHand.minus(
+                data.quantityOnHand.decrement,
+              ),
+              updatedAt: new Date(),
+            };
+          }
+          if (data.quantityOnHand?.increment) {
+            balance = {
+              ...balance,
+              quantityOnHand: balance.quantityOnHand.plus(
+                data.quantityOnHand.increment,
+              ),
+              updatedAt: new Date(),
+            };
+          }
           return { ...balance };
-        }
-        return null;
-      }),
-      update: jest.fn(async ({ data }: { data: { quantityOnHand: { decrement?: Prisma.Decimal; increment?: Prisma.Decimal } } }) => {
-        if (data.quantityOnHand?.decrement) {
+        },
+      ),
+      create: jest.fn(
+        async ({
+          data,
+        }: {
+          data: {
+            organizationId: string;
+            warehouseId: string;
+            variantId: string;
+            quantityOnHand: Prisma.Decimal;
+            quantityReserved: Prisma.Decimal;
+          };
+        }) => {
           balance = {
-            ...balance,
-            quantityOnHand: balance.quantityOnHand.minus(data.quantityOnHand.decrement),
+            id: "bal-created",
+            organizationId: data.organizationId,
+            warehouseId: data.warehouseId,
+            variantId: data.variantId,
+            quantityOnHand: data.quantityOnHand,
+            quantityReserved: data.quantityReserved,
+            createdAt: new Date(),
             updatedAt: new Date(),
           };
-        }
-        if (data.quantityOnHand?.increment) {
-          balance = {
-            ...balance,
-            quantityOnHand: balance.quantityOnHand.plus(data.quantityOnHand.increment),
-            updatedAt: new Date(),
-          };
-        }
-        return { ...balance };
-      }),
-      create: jest.fn(),
+          return { ...balance };
+        },
+      ),
     },
     stockMovement: {
       create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
@@ -66,11 +139,31 @@ function createTxMock(initial: MockBalance) {
     serialUnit: {
       findUnique: jest.fn(),
       update: jest.fn(),
+      create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        const row = {
+          id: `serial-${serials.length + 1}`,
+          currentSaleItemId: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          ...data,
+        };
+        serials.push(row);
+        return row;
+      }),
     },
     $executeRaw: jest.fn(async () => 1),
   };
 
-  return { tx, getBalance: () => balance, movements };
+  return {
+    tx,
+    getBalance: () => balance,
+    movements,
+    serials,
+  };
+}
+
+function createService() {
+  return new InventoryService({} as never, { log: jest.fn() } as never);
 }
 
 describe("InventoryService.commitSaleMovement", () => {
@@ -94,7 +187,7 @@ describe("InventoryService.commitSaleMovement", () => {
 
   it("creates SALE movement and decrements on-hand (happy path)", async () => {
     const { tx, getBalance, movements } = createTxMock(baseBalance);
-    const service = new InventoryService({} as never);
+    const service = createService();
 
     const result = await service.commitSaleMovement(tx as never, {
       organizationId: orgId,
@@ -111,7 +204,7 @@ describe("InventoryService.commitSaleMovement", () => {
     expect(result.movements[0].quantityDelta).toBe("-3.0000");
     expect(result.balance.quantityOnHand).toBe("7.0000");
     expect(result.balance.quantityAvailable).toBe("7.0000");
-    expect(getBalance().quantityOnHand.equals(7)).toBe(true);
+    expect(getBalance()!.quantityOnHand.equals(7)).toBe(true);
     expect(movements[0].movementType).toBe(StockMovementType.SALE);
     expect(tx.$executeRaw).toHaveBeenCalled();
   });
@@ -123,7 +216,7 @@ describe("InventoryService.commitSaleMovement", () => {
       quantityReserved: new Prisma.Decimal(1),
     };
     const { tx } = createTxMock(low);
-    const service = new InventoryService({} as never);
+    const service = createService();
 
     await expect(
       service.commitSaleMovement(tx as never, {
@@ -171,7 +264,7 @@ describe("InventoryService.commitSaleMovement", () => {
       updatedAt: new Date(),
     }));
 
-    const service = new InventoryService({} as never);
+    const service = createService();
 
     await expect(
       service.commitSaleMovement(tx as never, {
@@ -185,5 +278,113 @@ describe("InventoryService.commitSaleMovement", () => {
         serialUnitIds: ["serial-1"],
       }),
     ).rejects.toBeInstanceOf(UnprocessableEntityException);
+  });
+});
+
+describe("InventoryService.commitAdjustment", () => {
+  const orgId = "11111111-1111-1111-1111-111111111111";
+  const warehouseId = "33333333-3333-3333-3333-333333333333";
+  const variantId = "44444444-4444-4444-4444-444444444444";
+
+  const baseBalance: MockBalance = {
+    id: "bal-1",
+    organizationId: orgId,
+    warehouseId,
+    variantId,
+    quantityOnHand: new Prisma.Decimal(5),
+    quantityReserved: new Prisma.Decimal(0),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  it("creates ADJUSTMENT and increments on-hand for non-serial intake", async () => {
+    const { tx, getBalance, movements } = createTxMock(baseBalance, {
+      tracksSerial: false,
+    });
+    const service = createService();
+
+    const result = await service.commitAdjustment(tx as never, {
+      organizationId: orgId,
+      warehouseId,
+      variantId,
+      quantityDelta: 4,
+      reason: "Opening stock",
+    });
+
+    expect(result.movements).toHaveLength(1);
+    expect(result.movements[0].movementType).toBe(StockMovementType.ADJUSTMENT);
+    expect(result.movements[0].quantityDelta).toBe("4.0000");
+    expect(result.movements[0].reason).toBe("Opening stock");
+    expect(result.balance.quantityOnHand).toBe("9.0000");
+    expect(result.serials).toHaveLength(0);
+    expect(getBalance()!.quantityOnHand.equals(9)).toBe(true);
+    expect(movements[0].movementType).toBe(StockMovementType.ADJUSTMENT);
+  });
+
+  it("throws INSUFFICIENT_STOCK on negative adjustment when available < |delta|", async () => {
+    const { tx } = createTxMock(baseBalance, { tracksSerial: false });
+    const service = createService();
+
+    await expect(
+      service.commitAdjustment(tx as never, {
+        organizationId: orgId,
+        warehouseId,
+        variantId,
+        quantityDelta: -6,
+        reason: "Write-down",
+      }),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+
+    try {
+      await service.commitAdjustment(tx as never, {
+        organizationId: orgId,
+        warehouseId,
+        variantId,
+        quantityDelta: -6,
+        reason: "Write-down",
+      });
+    } catch (err) {
+      const response = (err as UnprocessableEntityException).getResponse() as {
+        code: string;
+        available: string;
+      };
+      expect(response.code).toBe("INSUFFICIENT_STOCK");
+      expect(response.available).toBe("5.0000");
+    }
+  });
+
+  it("creates serial units and one ADJUSTMENT movement per serial on intake", async () => {
+    const { tx, getBalance, movements, serials } = createTxMock(null, {
+      tracksSerial: true,
+      variantId,
+      organizationId: orgId,
+    });
+
+    const service = createService();
+
+    const result = await service.commitAdjustment(tx as never, {
+      organizationId: orgId,
+      warehouseId,
+      variantId,
+      quantityDelta: 2,
+      reason: "IMEI intake",
+      serialNumbers: ["IMEI-1001", "IMEI-1002"],
+    });
+
+    expect(result.serials).toHaveLength(2);
+    expect(result.serials[0].serialNumber).toBe("IMEI-1001");
+    expect(result.serials[0].status).toBe(SerialStatus.IN_STOCK);
+    expect(result.movements).toHaveLength(2);
+    expect(result.movements.every((m: { movementType: string }) => m.movementType === "ADJUSTMENT")).toBe(
+      true,
+    );
+    expect(result.movements.every((m: { quantityDelta: string }) => m.quantityDelta === "1.0000")).toBe(
+      true,
+    );
+    expect(result.balance.quantityOnHand).toBe("2.0000");
+    expect(getBalance()!.quantityOnHand.equals(2)).toBe(true);
+    expect(serials).toHaveLength(2);
+    expect(movements).toHaveLength(2);
+    expect(tx.stockBalance.create).toHaveBeenCalled();
   });
 });

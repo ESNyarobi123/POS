@@ -70,7 +70,7 @@ export function ProductInsightPanel({
   if (!selected) {
     return (
       <aside
-        className="flex h-full flex-col gap-4 rounded-2xl border border-gulio-border bg-gradient-to-b from-white to-slate-50/80 p-4 shadow-sm"
+        className="flex h-full flex-col gap-4 rounded-2xl border border-gulio-border bg-gradient-to-b from-white to-slate-50/80 p-5 shadow-sm"
         aria-label="Catalog portfolio overview"
       >
         <header className="space-y-1">
@@ -190,7 +190,7 @@ export function ProductInsightPanel({
 
   return (
     <aside
-      className="flex h-full flex-col gap-4 rounded-2xl border border-teal-200/70 bg-gradient-to-b from-white via-teal-50/20 to-slate-50/60 p-4 shadow-md transition-shadow duration-300"
+      className="flex h-full flex-col gap-4 rounded-2xl border border-teal-200/70 bg-gradient-to-b from-white via-teal-50/20 to-slate-50/60 p-5 shadow-md transition-shadow duration-300"
       aria-label={`Insights for ${selected.name}`}
     >
       <header className="flex items-start justify-between gap-2">
@@ -252,7 +252,7 @@ export function ProductInsightPanel({
               Edit
             </Link>
             <Link
-              href="/labels"
+              href={`/labels?variantId=${encodeURIComponent(selected.key)}`}
               className="inline-flex min-h-10 items-center justify-center rounded-xl bg-gulio-primary px-3 text-xs font-semibold text-white shadow-sm hover:bg-gulio-primary-hover"
             >
               Print label

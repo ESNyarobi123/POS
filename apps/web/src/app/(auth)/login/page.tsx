@@ -165,6 +165,9 @@ export default function LoginPage() {
               <p className="text-[11px] text-gulio-muted">
                 Password for all:{" "}
                 <span className="font-mono">Password123!</span>
+                <br />
+                Owner/Manager PIN (large refunds):{" "}
+                <span className="font-mono">1234</span>
               </p>
               {DEMO_ACCOUNTS.map((a) => (
                 <button

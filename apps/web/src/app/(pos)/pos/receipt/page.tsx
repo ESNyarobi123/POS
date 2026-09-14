@@ -199,7 +199,7 @@ function ReceiptInner() {
           New sale
         </Link>
         <Link
-          href="/returns"
+          href={`/returns?receipt=${encodeURIComponent(sale.receiptNumber)}`}
           className="flex-1 rounded-lg border border-gulio-border bg-white py-3 text-center text-sm font-semibold"
         >
           Return

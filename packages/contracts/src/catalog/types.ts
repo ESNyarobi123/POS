@@ -83,9 +83,22 @@ export type StockHintDto = {
 
 export type VariantLookupResponse = {
   variant: VariantDetailDto;
-  matchedBy: "barcode" | "sku";
+  matchedBy: "barcode" | "sku" | "qr";
   matchedCode: string;
   stockHint: StockHintDto | null;
+};
+
+/** Ensure a primary Code 128 barcode exists for label printing. */
+export type EnsureVariantBarcodeResponse = {
+  variantId: string;
+  barcode: {
+    id: string;
+    symbology: string;
+    value: string;
+    isPrimary: boolean;
+    created: boolean;
+  };
+  qrPayload: string;
 };
 
 export type CategoryListResponse = {
@@ -100,4 +113,10 @@ export type ListProductsQuery = {
   q?: string;
   categoryId?: string;
   limit?: number;
+};
+
+export type UpdateProductRequest = {
+  name?: string;
+  description?: string | null;
+  imageUrl?: string | null;
 };

@@ -71,6 +71,8 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
 };
 
 const SEED_PASSWORD = "Password123!";
+/** Demo manager PIN for large refunds / privileged overrides. */
+const SEED_PIN = "1234";
 
 async function upsertPermission(code: string, description: string) {
   return prisma.permission.upsert({
@@ -84,6 +86,7 @@ async function main() {
   console.log("Seeding GulioSmart Phase 1 vertical slice...");
 
   const passwordHash = await bcrypt.hash(SEED_PASSWORD, 10);
+  const pinHash = await bcrypt.hash(SEED_PIN, 10);
 
   for (const p of PERMISSIONS) {
     await upsertPermission(p.code, p.description);
@@ -189,6 +192,7 @@ async function main() {
     email: string;
     fullName: string;
     roleCode: "OWNER" | "MANAGER" | "CASHIER";
+    pin?: string;
   }) {
     const email = input.email.toLowerCase();
     const existing = await prisma.user.findUnique({
@@ -197,12 +201,15 @@ async function main() {
       },
     });
 
+    const nextPinHash = input.pin ? pinHash : null;
+
     const user = existing
       ? await prisma.user.update({
           where: { id: existing.id },
           data: {
             fullName: input.fullName,
             passwordHash,
+            pinHash: nextPinHash,
             isActive: true,
           },
         })
@@ -212,6 +219,7 @@ async function main() {
             email,
             fullName: input.fullName,
             passwordHash,
+            pinHash: nextPinHash,
             isActive: true,
           },
         });
@@ -239,12 +247,14 @@ async function main() {
     email: "owner@guliosmart.local",
     fullName: "Gulio Owner",
     roleCode: "OWNER",
+    pin: SEED_PIN,
   });
 
   const manager = await upsertUser({
     email: "manager@guliosmart.local",
     fullName: "Gulio Manager",
     roleCode: "MANAGER",
+    pin: SEED_PIN,
   });
 
   const cashier = await upsertUser({

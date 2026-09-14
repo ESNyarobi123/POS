@@ -27,7 +27,12 @@ export function DataTable({
           <thead className="border-b border-gulio-border bg-gulio-bg/80 text-gulio-muted">
             <tr>
               {columns.map((col) => (
-                <th key={col} className="px-4 py-3 font-medium whitespace-nowrap">
+                <th
+                  key={col}
+                  className={`px-5 py-3.5 font-medium whitespace-nowrap ${
+                    col === "Actions" ? "text-right" : ""
+                  }`}
+                >
                   {col}
                 </th>
               ))}

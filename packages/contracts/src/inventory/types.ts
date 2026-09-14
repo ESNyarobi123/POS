@@ -112,3 +112,31 @@ export interface CommitReturnMovementResult {
   movements: StockMovementDto[];
   balance: StockBalanceDto | null;
 }
+
+export interface CommitAdjustmentInput {
+  organizationId: string;
+  warehouseId: string;
+  variantId: string;
+  /** Signed units. Positive = intake; negative = write-down. */
+  quantityDelta: number | DecimalString;
+  reason: string;
+  /** Required when variant.tracksSerial and quantityDelta > 0; length must equal |delta|. */
+  serialNumbers?: string[];
+  createdByUserId?: string;
+  referenceType?: string;
+  referenceId?: string;
+}
+
+export interface CommitAdjustmentResult {
+  movements: StockMovementDto[];
+  balance: StockBalanceDto;
+  serials: SerialUnitDto[];
+}
+
+export type CreateStockAdjustmentRequest = {
+  warehouseId: string;
+  variantId: string;
+  quantityDelta: number;
+  reason: string;
+  serialNumbers?: string[];
+};

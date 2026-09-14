@@ -131,7 +131,7 @@ services:
       context: .
       dockerfile: infra/docker/Dockerfile.web
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:4010
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4015}
     restart: unless-stopped
     depends_on:
       api:

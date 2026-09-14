@@ -13,24 +13,33 @@ import {
   PaymentMethod,
   Prisma,
   RegisterSessionStatus,
+  ReturnDisposition,
   ReturnStatus,
   SaleStatus,
+  SerialStatus,
   type Payment,
   type RegisterSession,
+  type Return,
+  type ReturnItem,
   type Sale,
   type SaleItem,
   type SaleItemSerial,
 } from "@gulio/database";
+import { verifyPassword } from "@gulio/auth";
 import { PermissionCode } from "@gulio/contracts";
 import type {
   CheckoutRequest,
   CloseShiftRequest,
+  CreateReturnRequest,
   DecimalString,
   FiscalDocumentStubDto,
   OpenShiftRequest,
   PaymentDto,
   ReceiptDto,
   RegisterSessionDto,
+  ReturnableSaleDto,
+  ReturnDto,
+  ReturnListResponse,
   SaleDto,
   SaleItemDto,
 } from "@gulio/contracts";
@@ -80,6 +89,66 @@ const SALE_INCLUDE = {
   payments: true,
   fiscalDocument: true,
 } as const;
+
+const RETURNABLE_SALE_INCLUDE = {
+  items: {
+    include: {
+      variant: {
+        select: {
+          id: true,
+          sku: true,
+          name: true,
+          tracksSerial: true,
+          product: { select: { name: true } },
+        },
+      },
+      serials: {
+        include: {
+          serialUnit: {
+            select: { id: true, serialNumber: true, status: true },
+          },
+        },
+      },
+      returnItems: {
+        where: { returnDoc: { status: ReturnStatus.COMPLETED } },
+        select: { quantity: true },
+      },
+    },
+  },
+} as const;
+
+const RETURN_INCLUDE = {
+  items: {
+    include: {
+      saleItem: { select: { variantId: true } },
+    },
+  },
+  sale: { select: { receiptNumber: true } },
+} as const;
+
+/** MVP hardcoded threshold (TZS minor units as decimal). */
+const LARGE_REFUND_THRESHOLD = new Prisma.Decimal("500000.0000");
+
+const MANAGER_ROLES = new Set(["OWNER", "MANAGER"]);
+
+type ReturnWithRelations = Return & {
+  items: Array<
+    ReturnItem & {
+      saleItem?: { variantId: string } | null;
+    }
+  >;
+  sale?: { receiptNumber: string } | null;
+};
+
+type PreparedReturnLine = {
+  saleItemId: string;
+  variantId: string;
+  quantity: Prisma.Decimal;
+  disposition: ReturnDisposition;
+  refundAmount: Prisma.Decimal;
+  serialUnitIds: string[];
+  serialUnitId: string | null;
+};
 
 function toDecimal(value: number | string | Prisma.Decimal): Prisma.Decimal {
   return value instanceof Prisma.Decimal
@@ -709,6 +778,333 @@ export class PosService {
     return sales.map((s) => this.mapSale(s));
   }
 
+  async getReturnableSaleByReceipt(
+    user: RequestUser,
+    receiptNumber: string,
+  ): Promise<ReturnableSaleDto> {
+    const trimmed = receiptNumber?.trim();
+    if (!trimmed) {
+      throw new BadRequestException("receiptNumber is required");
+    }
+
+    const sale = await this.prisma.sale.findFirst({
+      where: {
+        organizationId: user.organizationId,
+        receiptNumber: trimmed,
+        status: SaleStatus.COMPLETED,
+      },
+      include: RETURNABLE_SALE_INCLUDE,
+    });
+    if (!sale) {
+      throw new NotFoundException("Completed sale not found for receipt");
+    }
+
+    return this.mapReturnableSale(sale);
+  }
+
+  async listReturns(
+    user: RequestUser,
+    limit = 20,
+  ): Promise<ReturnListResponse> {
+    const take = Math.min(Math.max(limit, 1), 100);
+    const rows = await this.prisma.return.findMany({
+      where: { organizationId: user.organizationId },
+      orderBy: [{ processedAt: "desc" }, { createdAt: "desc" }],
+      take,
+      include: RETURN_INCLUDE,
+    });
+    return {
+      items: rows.map((row) => this.mapReturn(row, null)),
+    };
+  }
+
+  async createReturn(
+    user: RequestUser,
+    idempotencyKey: string | undefined,
+    body: CreateReturnRequest,
+  ): Promise<ReturnDto> {
+    const key = idempotencyKey?.trim();
+    if (key) {
+      const prior = await this.findReturnByIdempotencyKey(
+        user.organizationId,
+        key,
+      );
+      if (prior) {
+        return this.mapReturn(prior, body.refundMethod);
+      }
+    }
+
+    if (!body.saleId) {
+      throw new BadRequestException("saleId is required");
+    }
+    if (!body.warehouseId) {
+      throw new BadRequestException("warehouseId is required");
+    }
+    if (!body.reasonCode?.trim()) {
+      throw new BadRequestException("reasonCode is required");
+    }
+    if (!body.items?.length) {
+      throw new BadRequestException("At least one return line is required");
+    }
+    if (
+      body.refundMethod !== "CASH" &&
+      body.refundMethod !== "MOBILE_MONEY_MANUAL"
+    ) {
+      throw new BadRequestException(
+        "refundMethod must be CASH or MOBILE_MONEY_MANUAL",
+      );
+    }
+
+    const sale = await this.prisma.sale.findFirst({
+      where: {
+        id: body.saleId,
+        organizationId: user.organizationId,
+        status: SaleStatus.COMPLETED,
+      },
+      include: RETURNABLE_SALE_INCLUDE,
+    });
+    if (!sale) {
+      throw new NotFoundException("Completed sale not found");
+    }
+
+    const warehouse = await this.prisma.warehouse.findFirst({
+      where: {
+        id: body.warehouseId,
+        organizationId: user.organizationId,
+      },
+    });
+    if (!warehouse) {
+      throw new NotFoundException("Warehouse not found");
+    }
+
+    const saleItemById = new Map(sale.items.map((item) => [item.id, item]));
+    const alreadyReturnedByItem = await this.sumCompletedReturnsBySaleItem(
+      sale.id,
+    );
+
+    const preparedLines: PreparedReturnLine[] = [];
+    let refundTotal = new Prisma.Decimal(0);
+
+    for (const line of body.items) {
+      const saleItem = saleItemById.get(line.saleItemId);
+      if (!saleItem) {
+        throw new NotFoundException(
+          `Sale item not found on sale: ${line.saleItemId}`,
+        );
+      }
+
+      const qty = toDecimal(line.quantity);
+      if (!qty.isInteger() || qty.lte(0)) {
+        throw new BadRequestException(
+          `Return quantity must be a positive integer for saleItem ${line.saleItemId}`,
+        );
+      }
+
+      const soldQty = toDecimal(saleItem.quantity);
+      const alreadyReturned =
+        alreadyReturnedByItem.get(line.saleItemId) ?? new Prisma.Decimal(0);
+      const returnable = soldQty.minus(alreadyReturned);
+      if (qty.gt(returnable)) {
+        throw new UnprocessableEntityException({
+          code: "RETURN_QTY_EXCEEDS_RETURNABLE",
+          message: `Cannot return ${qty.toFixed(0)} units; only ${returnable.toFixed(0)} returnable for sale item ${line.saleItemId}`,
+          saleItemId: line.saleItemId,
+          quantityReturnable: toDecimalString(returnable),
+        });
+      }
+
+      const disposition = this.parseReturnDisposition(line.disposition);
+      const serialUnitIds = line.serialUnitIds ?? [];
+
+      if (saleItem.tracksSerial) {
+        if (serialUnitIds.length !== qty.toNumber()) {
+          throw new UnprocessableEntityException({
+            code: "SERIAL_REQUIRED",
+            message: `Serial-tracked item requires ${qty.toFixed(0)} serialUnitIds`,
+            saleItemId: line.saleItemId,
+          });
+        }
+
+        const soldSerialIds = new Set(
+          saleItem.serials.map((s) => s.serialUnitId),
+        );
+        for (const serialUnitId of serialUnitIds) {
+          if (!soldSerialIds.has(serialUnitId)) {
+            throw new UnprocessableEntityException({
+              code: "SERIAL_NOT_ON_SALE",
+              message: `Serial ${serialUnitId} was not sold on this line`,
+              saleItemId: line.saleItemId,
+              serialUnitId,
+            });
+          }
+          const link = saleItem.serials.find(
+            (s) => s.serialUnitId === serialUnitId,
+          );
+          if (link?.serialUnit?.status !== SerialStatus.SOLD) {
+            throw new UnprocessableEntityException({
+              code: "SERIAL_NOT_SOLD",
+              message: `Serial ${serialUnitId} is not in SOLD status`,
+              saleItemId: line.saleItemId,
+              serialUnitId,
+              status: link?.serialUnit?.status,
+            });
+          }
+        }
+      } else if (serialUnitIds.length > 0) {
+        throw new BadRequestException(
+          `Sale item ${line.saleItemId} does not track serials`,
+        );
+      }
+
+      const lineRefund =
+        line.refundAmount !== undefined
+          ? toDecimal(line.refundAmount)
+          : toDecimal(saleItem.lineTotal).times(qty).div(soldQty);
+      if (lineRefund.lt(0)) {
+        throw new BadRequestException("refundAmount must be >= 0");
+      }
+      refundTotal = refundTotal.plus(lineRefund);
+
+      if (saleItem.tracksSerial) {
+        const perUnitRefund = lineRefund.div(qty);
+        for (const serialUnitId of serialUnitIds) {
+          preparedLines.push({
+            saleItemId: saleItem.id,
+            variantId: saleItem.variantId,
+            quantity: new Prisma.Decimal(1),
+            disposition,
+            refundAmount: perUnitRefund,
+            serialUnitIds: [serialUnitId],
+            serialUnitId,
+          });
+        }
+      } else {
+        preparedLines.push({
+          saleItemId: saleItem.id,
+          variantId: saleItem.variantId,
+          quantity: qty,
+          disposition,
+          refundAmount: lineRefund,
+          serialUnitIds: [],
+          serialUnitId: null,
+        });
+      }
+    }
+
+    let approvedByUserId: string | null = null;
+    if (refundTotal.gte(LARGE_REFUND_THRESHOLD)) {
+      const pin = body.managerPin?.trim() ?? "";
+      if (!pin) {
+        throw new ForbiddenException(
+          "Manager PIN required for refunds of TZS 500,000 or more",
+        );
+      }
+      const approver = await this.verifyManagerPin(user.organizationId, pin);
+      if (!approver) {
+        throw new ForbiddenException("Invalid manager PIN");
+      }
+      approvedByUserId = approver.id;
+    }
+
+    const returnDoc = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.return.create({
+        data: {
+          organizationId: user.organizationId,
+          saleId: sale.id,
+          branchId: sale.branchId,
+          processedByUserId: user.userId,
+          approvedByUserId,
+          status: ReturnStatus.PENDING,
+          refundTotal,
+          reasonCode: body.reasonCode.trim(),
+        },
+      });
+
+      const createdItems: Array<ReturnItem & { variantId: string }> = [];
+
+      for (const line of preparedLines) {
+        const item = await tx.returnItem.create({
+          data: {
+            returnId: created.id,
+            saleItemId: line.saleItemId,
+            serialUnitId: line.serialUnitId,
+            quantity: line.quantity,
+            disposition: line.disposition,
+            refundAmount: line.refundAmount,
+          },
+        });
+
+        await this.inventoryService.commitReturnMovement(tx, {
+          organizationId: user.organizationId,
+          branchId: sale.branchId,
+          warehouseId: body.warehouseId,
+          variantId: line.variantId,
+          quantity: toDecimalString(line.quantity),
+          returnId: created.id,
+          returnItemId: item.id,
+          saleItemId: line.saleItemId,
+          serialUnitIds:
+            line.serialUnitIds.length > 0 ? line.serialUnitIds : undefined,
+          restock: line.disposition === ReturnDisposition.RESTOCK,
+          disposition: line.disposition,
+          createdByUserId: user.userId,
+        });
+
+        createdItems.push({ ...item, variantId: line.variantId });
+      }
+
+      const completed = await tx.return.update({
+        where: { id: created.id },
+        data: {
+          status: ReturnStatus.COMPLETED,
+          processedAt: new Date(),
+        },
+        include: RETURN_INCLUDE,
+      });
+
+      await tx.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          actorUserId: user.userId,
+          action: "stock.return",
+          entityType: "Return",
+          entityId: completed.id,
+          afterJson: {
+            saleId: sale.id,
+            receiptNumber: sale.receiptNumber,
+            refundTotal: toDecimalString(refundTotal),
+            warehouseId: body.warehouseId,
+            itemCount: preparedLines.length,
+          },
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          actorUserId: user.userId,
+          action: "pos.return.create",
+          entityType: "Return",
+          entityId: completed.id,
+          afterJson: {
+            saleId: sale.id,
+            receiptNumber: sale.receiptNumber,
+            refundTotal: toDecimalString(refundTotal),
+            refundMethod: body.refundMethod,
+            reasonCode: body.reasonCode.trim(),
+            idempotencyKey: key ?? null,
+            approvedByUserId,
+            largeRefund: refundTotal.gte(LARGE_REFUND_THRESHOLD),
+          },
+        },
+      });
+
+      return completed;
+    });
+
+    return this.mapReturn(returnDoc, body.refundMethod);
+  }
+
   private async computeExpectedCash(session: RegisterSession): Promise<{
     expectedCash: Prisma.Decimal;
     cashSales: Prisma.Decimal;
@@ -859,5 +1255,181 @@ export class PosService {
       externalRef: row.externalRef,
       idempotencyKey: row.idempotencyKey,
     };
+  }
+
+  private mapReturnableSale(
+    sale: Sale & {
+      items: Array<
+        SaleItem & {
+          variant?: {
+            id: string;
+            sku: string;
+            name: string;
+            tracksSerial: boolean;
+            product?: { name: string } | null;
+          } | null;
+          serials: Array<
+            SaleItemSerial & {
+              serialUnit?: {
+                id: string;
+                serialNumber: string;
+                status: SerialStatus;
+              } | null;
+            }
+          >;
+          returnItems: Array<{ quantity: Prisma.Decimal }>;
+        }
+      >;
+    },
+  ): ReturnableSaleDto {
+    return {
+      saleId: sale.id,
+      receiptNumber: sale.receiptNumber,
+      completedAt: sale.completedAt ? sale.completedAt.toISOString() : null,
+      branchId: sale.branchId,
+      warehouseId: sale.warehouseId,
+      grandTotal: toDecimalString(sale.grandTotal),
+      items: sale.items.map((item) => {
+        const soldQty = toDecimal(item.quantity);
+        const alreadyReturned = item.returnItems.reduce(
+          (sum, ri) => sum.plus(toDecimal(ri.quantity)),
+          new Prisma.Decimal(0),
+        );
+        const returnable = soldQty.minus(alreadyReturned);
+
+        return {
+          saleItemId: item.id,
+          variantId: item.variantId,
+          productName: item.variant?.product?.name ?? "",
+          variantName: item.variant?.name ?? "",
+          sku: item.variant?.sku ?? "",
+          quantitySold: toDecimalString(soldQty),
+          quantityAlreadyReturned: toDecimalString(alreadyReturned),
+          quantityReturnable: toDecimalString(returnable.lt(0) ? 0 : returnable),
+          unitPrice: toDecimalString(item.unitPrice),
+          lineTotal: toDecimalString(item.lineTotal),
+          tracksSerial: item.tracksSerial,
+          serials: item.serials
+            .filter((s) => s.serialUnit?.status === SerialStatus.SOLD)
+            .map((s) => ({
+              serialUnitId: s.serialUnitId,
+              serialNumber: s.serialUnit?.serialNumber ?? "",
+              status: s.serialUnit?.status ?? "",
+            })),
+        };
+      }),
+    };
+  }
+
+  private mapReturn(
+    row: ReturnWithRelations,
+    refundMethod: string | null,
+  ): ReturnDto {
+    const restockedVariantIds = [
+      ...new Set(
+        row.items
+          .filter((i) => i.disposition === ReturnDisposition.RESTOCK)
+          .map((i) => i.saleItem?.variantId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+
+    return {
+      id: row.id,
+      saleId: row.saleId,
+      receiptNumber: row.sale?.receiptNumber ?? "",
+      status: row.status,
+      refundTotal: toDecimalString(row.refundTotal),
+      reasonCode: row.reasonCode,
+      refundMethod,
+      processedAt: row.processedAt ? row.processedAt.toISOString() : null,
+      createdAt: row.createdAt.toISOString(),
+      items: row.items.map((item) => ({
+        id: item.id,
+        saleItemId: item.saleItemId,
+        quantity: toDecimalString(item.quantity),
+        disposition: item.disposition,
+        refundAmount: toDecimalString(item.refundAmount),
+        serialUnitId: item.serialUnitId,
+      })),
+      restockedVariantIds,
+    };
+  }
+
+  private async findReturnByIdempotencyKey(
+    organizationId: string,
+    idempotencyKey: string,
+  ): Promise<ReturnWithRelations | null> {
+    const audit = await this.prisma.auditLog.findFirst({
+      where: {
+        organizationId,
+        action: "pos.return.create",
+        afterJson: {
+          path: ["idempotencyKey"],
+          equals: idempotencyKey,
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!audit?.entityId) {
+      return null;
+    }
+
+    return this.prisma.return.findFirst({
+      where: { id: audit.entityId, organizationId },
+      include: RETURN_INCLUDE,
+    });
+  }
+
+  private async sumCompletedReturnsBySaleItem(
+    saleId: string,
+  ): Promise<Map<string, Prisma.Decimal>> {
+    const rows = await this.prisma.returnItem.findMany({
+      where: {
+        saleItem: { saleId },
+        returnDoc: { status: ReturnStatus.COMPLETED },
+      },
+      select: { saleItemId: true, quantity: true },
+    });
+
+    const map = new Map<string, Prisma.Decimal>();
+    for (const row of rows) {
+      const prev = map.get(row.saleItemId) ?? new Prisma.Decimal(0);
+      map.set(row.saleItemId, prev.plus(toDecimal(row.quantity)));
+    }
+    return map;
+  }
+
+  private parseReturnDisposition(value: string): ReturnDisposition {
+    if (
+      !Object.values(ReturnDisposition).includes(value as ReturnDisposition)
+    ) {
+      throw new BadRequestException(`Invalid disposition: ${value}`);
+    }
+    return value as ReturnDisposition;
+  }
+
+  private async verifyManagerPin(
+    organizationId: string,
+    pin: string,
+  ): Promise<{ id: string } | null> {
+    const candidates = await this.prisma.user.findMany({
+      where: {
+        organizationId,
+        isActive: true,
+        pinHash: { not: null },
+        userRoles: {
+          some: { role: { code: { in: [...MANAGER_ROLES] } } },
+        },
+      },
+      select: { id: true, pinHash: true },
+    });
+
+    for (const candidate of candidates) {
+      if (!candidate.pinHash) continue;
+      const ok = await verifyPassword(pin, candidate.pinHash);
+      if (ok) return { id: candidate.id };
+    }
+    return null;
   }
 }

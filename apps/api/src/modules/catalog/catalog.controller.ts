@@ -1,9 +1,12 @@
 import {
   BadRequestException,
+  Body,
   Controller,
   Get,
   Param,
   ParseUUIDPipe,
+  Patch,
+  Post,
   Query,
   UseGuards,
 } from "@nestjs/common";
@@ -11,7 +14,10 @@ import { PermissionCode } from "@gulio/contracts";
 import type {
   BrandListResponse,
   CategoryListResponse,
+  EnsureVariantBarcodeResponse,
+  ProductListItemDto,
   ProductListResponse,
+  UpdateProductRequest,
   VariantDetailDto,
   VariantLookupResponse,
 } from "@gulio/contracts";
@@ -57,6 +63,34 @@ export class CatalogController {
     });
   }
 
+  @Get("products/:id")
+  @Permissions(...CATALOG_READ)
+  getProduct(
+    @CurrentUser() user: RequestUser,
+    @Param("id", ParseUUIDPipe) id: string,
+  ): Promise<ProductListItemDto> {
+    return this.catalogService.getProductById(user.organizationId, id);
+  }
+
+  @Patch("products/:id")
+  @Permissions(PermissionCode.CATALOG_MANAGE)
+  updateProduct(
+    @CurrentUser() user: RequestUser,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() body: UpdateProductRequest,
+  ): Promise<ProductListItemDto> {
+    return this.catalogService.updateProduct(user, id, body ?? {});
+  }
+
+  @Post("products/:id/archive")
+  @Permissions(PermissionCode.CATALOG_MANAGE)
+  archiveProduct(
+    @CurrentUser() user: RequestUser,
+    @Param("id", ParseUUIDPipe) id: string,
+  ): Promise<ProductListItemDto> {
+    return this.catalogService.archiveProduct(user, id);
+  }
+
   /** Scanner lookup — must be registered before variants/:id */
   @Get("variants/lookup")
   @Permissions(...CATALOG_READ)
@@ -82,6 +116,16 @@ export class CatalogController {
     @Param("id", ParseUUIDPipe) id: string,
   ): Promise<VariantDetailDto> {
     return this.catalogService.getVariantById(user.organizationId, id);
+  }
+
+  /** Ensure primary CODE128 barcode for label printing (cashiers have labels.print). */
+  @Post("variants/:id/ensure-barcode")
+  @Permissions(PermissionCode.LABELS_PRINT)
+  ensurePrimaryBarcode(
+    @CurrentUser() user: RequestUser,
+    @Param("id", ParseUUIDPipe) id: string,
+  ): Promise<EnsureVariantBarcodeResponse> {
+    return this.catalogService.ensurePrimaryBarcode(user.organizationId, id);
   }
 
   @Get("categories")

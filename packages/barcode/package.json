@@ -13,10 +13,11 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "test": "echo \"barcode tests: pending\""
+    "test": "pnpm build && node --test test/index.test.mjs"
   },
   "devDependencies": {
     "@gulio/typescript-config": "workspace:*",
+    "@types/node": "^22.10.0",
     "typescript": "^5.7.2"
   }
 }

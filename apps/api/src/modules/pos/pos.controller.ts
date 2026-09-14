@@ -14,6 +14,7 @@ import { PermissionCode } from "@gulio/contracts";
 import type {
   CheckoutRequest,
   CloseShiftRequest,
+  CreateReturnRequest,
   OpenShiftRequest,
 } from "@gulio/contracts";
 import {
@@ -91,5 +92,33 @@ export class PosController {
     @Query("limit", new DefaultValuePipe(20), ParseIntPipe) limit: number,
   ) {
     return this.posService.listRecentSales(user, limit);
+  }
+
+  @Get("returns/lookup-sale")
+  @Permissions(PermissionCode.POS_RETURN)
+  lookupReturnableSale(
+    @CurrentUser() user: RequestUser,
+    @Query("receiptNumber") receiptNumber: string,
+  ) {
+    return this.posService.getReturnableSaleByReceipt(user, receiptNumber);
+  }
+
+  @Get("returns")
+  @Permissions(PermissionCode.POS_RETURN)
+  listReturns(
+    @CurrentUser() user: RequestUser,
+    @Query("limit", new DefaultValuePipe(20), ParseIntPipe) limit: number,
+  ) {
+    return this.posService.listReturns(user, limit);
+  }
+
+  @Post("returns")
+  @Permissions(PermissionCode.POS_RETURN)
+  createReturn(
+    @CurrentUser() user: RequestUser,
+    @Headers("idempotency-key") idempotencyKey: string | undefined,
+    @Body() body: CreateReturnRequest,
+  ) {
+    return this.posService.createReturn(user, idempotencyKey, body);
   }
 }

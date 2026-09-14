@@ -17,5 +17,6 @@ module.exports = {
   moduleNameMapper: {
     "^@gulio/contracts$": "<rootDir>/../../../packages/contracts/src/index.ts",
     "^@gulio/database$": "<rootDir>/../../../packages/database/src/index.ts",
+    "^@gulio/auth$": "<rootDir>/../../../packages/auth/src/password.ts",
   },
 };

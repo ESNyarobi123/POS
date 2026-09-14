@@ -14,7 +14,7 @@ export default function BackofficeLayout({
         <BackOfficeSidebar />
         <BackOfficeAuthGate>
           <main className="min-w-0 flex-1 overflow-auto">
-            <div className="mx-auto max-w-6xl px-5 py-6 sm:px-6 lg:px-8">
+            <div className="w-full px-5 py-6 sm:px-6 lg:px-8">
               {children}
             </div>
           </main>

@@ -19,7 +19,9 @@ async function bootstrap() {
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
-    new FastifyAdapter(),
+    // Default Fastify bodyLimit is 1MB — product image data URLs need more headroom
+    // (5MB file ≈ ~6.7MB base64). Keep a small buffer above that.
+    new FastifyAdapter({ bodyLimit: 10 * 1024 * 1024 }),
     { bufferLogs: true }
   );
   

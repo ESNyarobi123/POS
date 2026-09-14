@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { ReactNode, SVGProps } from "react";
+import { BrandMark } from "@/components/shared/BrandMark";
 import { useAuth } from "@/lib/auth-store";
 import { API_BASE_URL } from "@/lib/api";
 import { PermissionCode, usePermissions } from "@/lib/permissions";
@@ -11,17 +12,12 @@ type TopBarProps = {
   showPosLink?: boolean;
 };
 
-type ChipTone = "brand" | "branch" | "cashier" | "shiftOn" | "shiftOff";
+type ChipTone = "branch" | "cashier" | "shiftOn" | "shiftOff";
 
 const chipTone: Record<
   ChipTone,
   { wrap: string; icon: string; label: string }
 > = {
-  brand: {
-    wrap: "border-teal-200/80 bg-gradient-to-b from-teal-50 to-white text-teal-800 shadow-sm shadow-teal-900/5 hover:border-teal-300 hover:from-teal-100/80",
-    icon: "bg-gulio-primary text-white shadow-sm shadow-teal-900/20",
-    label: "text-teal-900",
-  },
   branch: {
     wrap: "border-sky-200/80 bg-gradient-to-b from-sky-50 to-white text-sky-900 shadow-sm shadow-sky-900/5 hover:border-sky-300 hover:from-sky-100/70",
     icon: "bg-sky-500 text-white",
@@ -131,14 +127,9 @@ export function TopBar({
         className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         aria-label="Context"
       >
-        <HeaderButton
+        <BrandMark
           href={shift ? "/pos" : "/shift/open"}
           title="Go to POS register"
-          tone="brand"
-          eyebrow="Register"
-          label="GulioSmart POS"
-          icon={<IconStore className="h-3.5 w-3.5" />}
-          className="shrink-0"
         />
         <HeaderButton
           href={settingsHref}
@@ -237,16 +228,6 @@ function Chevron(props: SVGProps<SVGSVGElement>) {
         d="M7.21 14.77a.75.75 0 01.02-1.06L10.94 10 7.23 6.29a.75.75 0 111.06-1.06l4.24 4.24a.75.75 0 010 1.06l-4.24 4.24a.75.75 0 01-1.06-.02z"
         clipRule="evenodd"
       />
-    </svg>
-  );
-}
-
-function IconStore(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" {...props}>
-      <path d="M3 9l1-5h16l1 5" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M3 9h18v11a1 1 0 01-1 1H4a1 1 0 01-1-1V9z" strokeLinejoin="round" />
-      <path d="M9 20v-6h6v6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

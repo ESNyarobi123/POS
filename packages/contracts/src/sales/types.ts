@@ -166,3 +166,87 @@ export type ReceiptDto = {
   fiscal: FiscalDocumentStubDto | null;
   printedAt: string;
 };
+
+// ---------------------------------------------------------------------------
+// Returns (Phase 1)
+// ---------------------------------------------------------------------------
+
+export type ReturnDisposition =
+  | "RESTOCK"
+  | "DAMAGE"
+  | "WRITE_OFF"
+  | "SUPPLIER_RETURN";
+
+export type CreateReturnRequest = {
+  saleId: string;
+  warehouseId: string;
+  reasonCode: string;
+  refundMethod: "CASH" | "MOBILE_MONEY_MANUAL";
+  /** Required when refund total ≥ TZS 500,000 — PIN of Owner/Manager. */
+  managerPin?: string;
+  items: Array<{
+    saleItemId: string;
+    /** Whole units for MVP. */
+    quantity: number;
+    disposition: ReturnDisposition;
+    serialUnitIds?: string[];
+    /** Optional override; default = proportional lineTotal. */
+    refundAmount?: DecimalString;
+  }>;
+};
+
+export type ReturnableSaleItemDto = {
+  saleItemId: string;
+  variantId: string;
+  productName: string;
+  variantName: string;
+  sku: string;
+  quantitySold: DecimalString;
+  quantityAlreadyReturned: DecimalString;
+  quantityReturnable: DecimalString;
+  unitPrice: DecimalString;
+  lineTotal: DecimalString;
+  tracksSerial: boolean;
+  serials: Array<{
+    serialUnitId: string;
+    serialNumber: string;
+    status: string;
+  }>;
+};
+
+export type ReturnableSaleDto = {
+  saleId: string;
+  receiptNumber: string;
+  completedAt: string | null;
+  branchId: string;
+  warehouseId: string;
+  grandTotal: DecimalString;
+  items: ReturnableSaleItemDto[];
+};
+
+export type ReturnDto = {
+  id: string;
+  saleId: string;
+  receiptNumber: string;
+  status: string;
+  refundTotal: DecimalString;
+  reasonCode: string | null;
+  /** Echoed from request; persisted in audit only (no DB column). */
+  refundMethod: string | null;
+  processedAt: string | null;
+  createdAt: string;
+  items: Array<{
+    id: string;
+    saleItemId: string;
+    quantity: DecimalString;
+    disposition: string;
+    refundAmount: DecimalString;
+    serialUnitId: string | null;
+  }>;
+  /** Variant IDs restocked — for labels CTA. */
+  restockedVariantIds: string[];
+};
+
+export type ReturnListResponse = {
+  items: ReturnDto[];
+};

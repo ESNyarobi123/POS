@@ -4,6 +4,8 @@
 #
 # Upstream aliases (guliosmart-web / guliosmart-api) are set in docker-compose.prod.yml
 # so another stack on the same Docker network cannot steal the generic "web" DNS name.
+#
+# Shared OPTICEDGE host also routes giseeinfotech.duckdns.org on the same :80/:443.
 
 {
 	email admin@guliosmart.com
@@ -35,4 +37,14 @@ https://{$PUBLIC_HOST} {
 	handle {
 		reverse_proxy guliosmart-web:3000
 	}
+}
+
+http://giseeinfotech.duckdns.org {
+	encode gzip
+	reverse_proxy gisee-infotech-web:3000
+}
+
+https://giseeinfotech.duckdns.org {
+	encode gzip
+	reverse_proxy gisee-infotech-web:3000
 }

@@ -1,14 +1,19 @@
 import {
   ConflictException,
+  ForbiddenException,
   UnprocessableEntityException,
 } from "@nestjs/common";
+import { hashPassword } from "@gulio/auth";
 import {
   FiscalDocumentStatus,
   FiscalStatus,
   PaymentMethod,
   Prisma,
   RegisterSessionStatus,
+  ReturnDisposition,
+  ReturnStatus,
   SaleStatus,
+  SerialStatus,
 } from "@gulio/database";
 import { PermissionCode } from "@gulio/contracts";
 import type { RequestUser } from "../auth/types/request-user";
@@ -23,6 +28,11 @@ const USER = "66666666-6666-6666-6666-666666666666";
 const CABLE_VARIANT = "77777777-7777-7777-7777-777777777777";
 const PHONE_VARIANT = "88888888-8888-8888-8888-888888888888";
 const SERIAL_ID = "99999999-9999-9999-9999-999999999999";
+const SALE_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+const SALE_ITEM_CABLE = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+const SALE_ITEM_PHONE = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+const WRONG_SERIAL = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+const MANAGER_ID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
 
 function cashierUser(extraPerms: string[] = []): RequestUser {
   return {
@@ -360,6 +370,361 @@ describe("PosService.checkout", () => {
     expect(second.id).toBe(first.id);
     expect(second.receiptNumber).toBe(first.receiptNumber);
     expect(inventoryService.commitSaleMovement).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("PosService.createReturn", () => {
+  let prisma: {
+    sale: { findFirst: jest.Mock };
+    warehouse: { findFirst: jest.Mock };
+    returnItem: { findMany: jest.Mock };
+    return: { findFirst: jest.Mock; create: jest.Mock; update: jest.Mock };
+    auditLog: { findFirst: jest.Mock; create: jest.Mock };
+    user: { findMany: jest.Mock };
+    $transaction: jest.Mock;
+  };
+  let inventoryService: { commitReturnMovement: jest.Mock };
+  let service: PosService;
+  let managerPinHash: string;
+
+  beforeAll(async () => {
+    managerPinHash = await hashPassword("1234");
+  });
+
+  const completedSale = {
+    id: SALE_ID,
+    organizationId: ORG,
+    branchId: BRANCH,
+    warehouseId: WAREHOUSE,
+    receiptNumber: "RCP-00000001",
+    status: SaleStatus.COMPLETED,
+    grandTotal: new Prisma.Decimal("390000.0000"),
+    items: [
+      {
+        id: SALE_ITEM_CABLE,
+        variantId: CABLE_VARIANT,
+        quantity: new Prisma.Decimal(2),
+        unitPrice: new Prisma.Decimal("15000.0000"),
+        lineTotal: new Prisma.Decimal("30000.0000"),
+        tracksSerial: false,
+        serials: [],
+        returnItems: [],
+        variant: {
+          id: CABLE_VARIANT,
+          sku: "USB-C-CABLE",
+          name: "USB-C Cable",
+          tracksSerial: false,
+          product: { name: "USB-C Cable" },
+        },
+      },
+      {
+        id: SALE_ITEM_PHONE,
+        variantId: PHONE_VARIANT,
+        quantity: new Prisma.Decimal(1),
+        unitPrice: new Prisma.Decimal("360000.0000"),
+        lineTotal: new Prisma.Decimal("360000.0000"),
+        tracksSerial: true,
+        serials: [
+          {
+            saleItemId: SALE_ITEM_PHONE,
+            serialUnitId: SERIAL_ID,
+            serialUnit: {
+              id: SERIAL_ID,
+              serialNumber: "860000000000001",
+              status: SerialStatus.SOLD,
+            },
+          },
+        ],
+        returnItems: [],
+        variant: {
+          id: PHONE_VARIANT,
+          sku: "A07-128-BLK",
+          name: "128GB Black",
+          tracksSerial: true,
+          product: { name: "Galaxy A07" },
+        },
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    let returnSeq = 0;
+    let returnItemSeq = 0;
+    const createdReturnItems: Array<Record<string, unknown>> = [];
+    let pendingReturn: Record<string, unknown> | null = null;
+
+    const tx = {
+      return: {
+        create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          returnSeq += 1;
+          createdReturnItems.length = 0;
+          pendingReturn = {
+            id: `return-${returnSeq}`,
+            ...data,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            processedAt: null,
+            items: [],
+            sale: { receiptNumber: completedSale.receiptNumber },
+          };
+          return pendingReturn;
+        }),
+        update: jest.fn(
+          async ({
+            where,
+            data,
+          }: {
+            where: { id: string };
+            data: Record<string, unknown>;
+          }) => ({
+            id: where.id,
+            organizationId: ORG,
+            saleId: SALE_ID,
+            branchId: BRANCH,
+            processedByUserId: USER,
+            reasonCode: pendingReturn?.reasonCode ?? "DEFECTIVE",
+            refundTotal: pendingReturn?.refundTotal ?? new Prisma.Decimal("15000.0000"),
+            status: data.status ?? ReturnStatus.COMPLETED,
+            processedAt: data.processedAt ?? new Date(),
+            createdAt: pendingReturn?.createdAt ?? new Date(),
+            items: createdReturnItems.map((item) => ({
+              ...item,
+              saleItem: {
+                variantId:
+                  item.saleItemId === SALE_ITEM_CABLE
+                    ? CABLE_VARIANT
+                    : PHONE_VARIANT,
+              },
+            })),
+            sale: { receiptNumber: completedSale.receiptNumber },
+          }),
+        ),
+      },
+      returnItem: {
+        create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          returnItemSeq += 1;
+          const row = {
+            id: `return-item-${returnItemSeq}`,
+            ...data,
+          };
+          createdReturnItems.push(row);
+          return row;
+        }),
+      },
+      auditLog: {
+        create: jest.fn(async () => ({ id: "audit-return" })),
+      },
+    };
+
+    prisma = {
+      sale: {
+        findFirst: jest.fn(async () => completedSale),
+      },
+      warehouse: {
+        findFirst: jest.fn(async () => ({
+          id: WAREHOUSE,
+          organizationId: ORG,
+          branchId: BRANCH,
+        })),
+      },
+      returnItem: {
+        findMany: jest.fn(async () => []),
+      },
+      return: {
+        findFirst: jest.fn(),
+        create: tx.return.create,
+        update: tx.return.update,
+      },
+      auditLog: {
+        findFirst: jest.fn(async () => null),
+        create: tx.auditLog.create,
+      },
+      user: {
+        findMany: jest.fn(async () => [
+          { id: MANAGER_ID, pinHash: managerPinHash },
+        ]),
+      },
+      $transaction: jest.fn(async (fn: (client: typeof tx) => Promise<unknown>) =>
+        fn(tx),
+      ),
+    };
+
+    inventoryService = {
+      commitReturnMovement: jest.fn(async () => ({
+        movements: [],
+        balance: null,
+      })),
+    };
+
+    service = new PosService(
+      prisma as never,
+      inventoryService as unknown as InventoryService,
+    );
+  });
+
+  it("creates a completed return for a non-serial line", async () => {
+    const result = await service.createReturn(cashierUser(), "idem-return-1", {
+      saleId: SALE_ID,
+      warehouseId: WAREHOUSE,
+      reasonCode: "DEFECTIVE",
+      refundMethod: "CASH",
+      items: [
+        {
+          saleItemId: SALE_ITEM_CABLE,
+          quantity: 1,
+          disposition: "RESTOCK",
+        },
+      ],
+    });
+
+    expect(result.status).toBe(ReturnStatus.COMPLETED);
+    expect(result.refundTotal).toBe("15000.0000");
+    expect(result.refundMethod).toBe("CASH");
+    expect(result.restockedVariantIds).toEqual([CABLE_VARIANT]);
+    expect(inventoryService.commitReturnMovement).toHaveBeenCalledTimes(1);
+    expect(inventoryService.commitReturnMovement).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        variantId: CABLE_VARIANT,
+        restock: true,
+        disposition: ReturnDisposition.RESTOCK,
+      }),
+    );
+  });
+
+  it("creates a return for a serial-tracked phone with matching IMEI", async () => {
+    const result = await service.createReturn(cashierUser(), "idem-return-phone", {
+      saleId: SALE_ID,
+      warehouseId: WAREHOUSE,
+      reasonCode: "CHANGED_MIND",
+      refundMethod: "CASH",
+      items: [
+        {
+          saleItemId: SALE_ITEM_PHONE,
+          quantity: 1,
+          disposition: "RESTOCK",
+          serialUnitIds: [SERIAL_ID],
+        },
+      ],
+    });
+
+    expect(result.status).toBe(ReturnStatus.COMPLETED);
+    expect(result.refundTotal).toBe("360000.0000");
+    expect(inventoryService.commitReturnMovement).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        serialUnitIds: [SERIAL_ID],
+        restock: true,
+      }),
+    );
+  });
+
+  it("rejects IMEI not sold on the line", async () => {
+    await expect(
+      service.createReturn(cashierUser(), "idem-bad-serial", {
+        saleId: SALE_ID,
+        warehouseId: WAREHOUSE,
+        reasonCode: "DEFECTIVE",
+        refundMethod: "CASH",
+        items: [
+          {
+            saleItemId: SALE_ITEM_PHONE,
+            quantity: 1,
+            disposition: "RESTOCK",
+            serialUnitIds: [WRONG_SERIAL],
+          },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+
+    expect(inventoryService.commitReturnMovement).not.toHaveBeenCalled();
+  });
+
+  it("rejects return quantity above returnable", async () => {
+    await expect(
+      service.createReturn(cashierUser(), "idem-over-qty", {
+        saleId: SALE_ID,
+        warehouseId: WAREHOUSE,
+        reasonCode: "DEFECTIVE",
+        refundMethod: "CASH",
+        items: [
+          {
+            saleItemId: SALE_ITEM_CABLE,
+            quantity: 3,
+            disposition: "RESTOCK",
+          },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+
+    expect(inventoryService.commitReturnMovement).not.toHaveBeenCalled();
+  });
+
+  it("requires manager PIN above large-refund threshold", async () => {
+    await expect(
+      service.createReturn(cashierUser(), "idem-large", {
+        saleId: SALE_ID,
+        warehouseId: WAREHOUSE,
+        reasonCode: "CHANGED_MIND",
+        refundMethod: "CASH",
+        items: [
+          {
+            saleItemId: SALE_ITEM_PHONE,
+            quantity: 1,
+            disposition: "RESTOCK",
+            serialUnitIds: [SERIAL_ID],
+            refundAmount: "500000.0000",
+          },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+
+    expect(inventoryService.commitReturnMovement).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid manager PIN on large refund", async () => {
+    await expect(
+      service.createReturn(cashierUser(), "idem-large-bad-pin", {
+        saleId: SALE_ID,
+        warehouseId: WAREHOUSE,
+        reasonCode: "CHANGED_MIND",
+        refundMethod: "CASH",
+        managerPin: "0000",
+        items: [
+          {
+            saleItemId: SALE_ITEM_PHONE,
+            quantity: 1,
+            disposition: "RESTOCK",
+            serialUnitIds: [SERIAL_ID],
+            refundAmount: "500000.0000",
+          },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+
+    expect(inventoryService.commitReturnMovement).not.toHaveBeenCalled();
+  });
+
+  it("allows large refund when manager PIN matches", async () => {
+    const result = await service.createReturn(cashierUser(), "idem-large-pin", {
+      saleId: SALE_ID,
+      warehouseId: WAREHOUSE,
+      reasonCode: "CHANGED_MIND",
+      refundMethod: "CASH",
+      managerPin: "1234",
+      items: [
+        {
+          saleItemId: SALE_ITEM_PHONE,
+          quantity: 1,
+          disposition: "RESTOCK",
+          serialUnitIds: [SERIAL_ID],
+          refundAmount: "500000.0000",
+        },
+      ],
+    });
+
+    expect(result.refundTotal).toBe("500000.0000");
+    expect(inventoryService.commitReturnMovement).toHaveBeenCalled();
   });
 });
 
