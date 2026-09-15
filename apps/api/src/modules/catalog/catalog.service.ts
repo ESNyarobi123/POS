@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -13,11 +14,14 @@ import type {
   BrandListResponse,
   CategoryDto,
   CategoryListResponse,
+  CreateCategoryRequest,
+  CreateProductRequest,
   DecimalString,
   EnsureVariantBarcodeResponse,
   ProductListItemDto,
   ProductListResponse,
   StockHintDto,
+  UpdateCategoryRequest,
   UpdateProductRequest,
   VariantDetailDto,
   VariantLookupResponse,
@@ -282,6 +286,172 @@ export class CatalogService {
     return mapProductListItem(row);
   }
 
+  async createProduct(
+    user: RequestUser,
+    body: CreateProductRequest,
+  ): Promise<ProductListItemDto> {
+    const name = body.name?.trim();
+    if (!name) {
+      throw new BadRequestException("name is required");
+    }
+
+    const variantBody = body.variant;
+    if (!variantBody || typeof variantBody !== "object") {
+      throw new BadRequestException("variant is required");
+    }
+
+    const variantName = variantBody.name?.trim();
+    if (!variantName) {
+      throw new BadRequestException("variant.name is required");
+    }
+
+    const sku = variantBody.sku?.trim().toUpperCase();
+    if (!sku) {
+      throw new BadRequestException("variant.sku is required");
+    }
+
+    let sellPrice: Prisma.Decimal;
+    try {
+      sellPrice = new Prisma.Decimal(
+        String(variantBody.sellPrice ?? "").trim(),
+      );
+    } catch {
+      throw new BadRequestException(
+        "variant.sellPrice must be a valid decimal string",
+      );
+    }
+    if (sellPrice.isNaN() || !sellPrice.isFinite() || sellPrice.lt(0)) {
+      throw new BadRequestException("variant.sellPrice must be >= 0");
+    }
+
+    const barcodeValue = variantBody.barcode?.trim() || null;
+    const requiresSerial = Boolean(variantBody.requiresSerial);
+    const description =
+      body.description !== undefined
+        ? body.description?.trim() || null
+        : null;
+    const imageUrl =
+      body.imageUrl !== undefined ? body.imageUrl?.trim() || null : null;
+
+    const existingSku = await this.prisma.variant.findFirst({
+      where: {
+        organizationId: user.organizationId,
+        sku: { equals: sku, mode: "insensitive" },
+      },
+      select: { id: true },
+    });
+    if (existingSku) {
+      throw new ConflictException(`SKU already exists: ${sku}`);
+    }
+
+    if (barcodeValue) {
+      const existingBarcode = await this.prisma.barcode.findFirst({
+        where: {
+          organizationId: user.organizationId,
+          value: barcodeValue,
+        },
+        select: { id: true },
+      });
+      if (existingBarcode) {
+        throw new ConflictException(`Barcode already exists: ${barcodeValue}`);
+      }
+    }
+
+    try {
+      const created = await this.prisma.$transaction(async (tx) => {
+        const brandId = await this.resolveBrandId(
+          tx,
+          user.organizationId,
+          body.brandId,
+          body.brandName,
+        );
+        const categoryId = await this.resolveCategoryId(
+          tx,
+          user.organizationId,
+          body.categoryId,
+          body.categoryName,
+        );
+
+        const product = await tx.product.create({
+          data: {
+            organizationId: user.organizationId,
+            name,
+            description,
+            imageUrl,
+            brandId,
+            categoryId,
+            isActive: true,
+            variants: {
+              create: {
+                organizationId: user.organizationId,
+                sku,
+                name: variantName,
+                attributes: {},
+                sellPrice,
+                costPrice: new Prisma.Decimal(0),
+                tracksSerial: requiresSerial,
+                isActive: true,
+                ...(barcodeValue
+                  ? {
+                      barcodes: {
+                        create: {
+                          organizationId: user.organizationId,
+                          symbology: guessBarcodeSymbology(barcodeValue),
+                          value: barcodeValue,
+                          isPrimary: true,
+                        },
+                      },
+                    }
+                  : {}),
+              },
+            },
+          },
+          include: productDetailInclude,
+        });
+
+        return product;
+      });
+
+      await this.audit.log({
+        action: "catalog.product.create",
+        entityType: "Product",
+        entityId: created.id,
+        userId: user.userId,
+        orgId: user.organizationId,
+        meta: {
+          name: created.name,
+          sku,
+          sellPrice: toDecimalString(sellPrice),
+          requiresSerial,
+          brandId: created.brandId,
+          categoryId: created.categoryId,
+          barcode: barcodeValue,
+        },
+      });
+
+      return mapProductListItem(created);
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === "P2002"
+      ) {
+        const target = Array.isArray(err.meta?.target)
+          ? (err.meta.target as string[]).join(",")
+          : String(err.meta?.target ?? "");
+        if (target.includes("sku")) {
+          throw new ConflictException(`SKU already exists: ${sku}`);
+        }
+        if (target.includes("value") || target.includes("barcodes")) {
+          throw new ConflictException(
+            `Barcode already exists: ${barcodeValue}`,
+          );
+        }
+        throw new ConflictException("Product conflicts with existing catalog data");
+      }
+      throw err;
+    }
+  }
+
   async updateProduct(
     user: RequestUser,
     productId: string,
@@ -299,18 +469,34 @@ export class CatalogService {
       throw new BadRequestException("name cannot be empty");
     }
 
-    const updated = await this.prisma.product.update({
-      where: { id: existing.id },
-      data: {
-        ...(name !== undefined ? { name } : {}),
-        ...(body.description !== undefined
-          ? { description: body.description?.trim() || null }
-          : {}),
-        ...(body.imageUrl !== undefined
-          ? { imageUrl: body.imageUrl?.trim() || null }
-          : {}),
-      },
-      include: productDetailInclude,
+    const shouldUpdateCategory =
+      body.categoryId !== undefined || body.categoryName !== undefined;
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      let categoryId: string | null | undefined;
+      if (shouldUpdateCategory) {
+        categoryId = await this.resolveCategoryId(
+          tx,
+          user.organizationId,
+          body.categoryId,
+          body.categoryName,
+        );
+      }
+
+      return tx.product.update({
+        where: { id: existing.id },
+        data: {
+          ...(name !== undefined ? { name } : {}),
+          ...(body.description !== undefined
+            ? { description: body.description?.trim() || null }
+            : {}),
+          ...(body.imageUrl !== undefined
+            ? { imageUrl: body.imageUrl?.trim() || null }
+            : {}),
+          ...(shouldUpdateCategory ? { categoryId } : {}),
+        },
+        include: productDetailInclude,
+      });
     });
 
     await this.audit.log({
@@ -323,11 +509,13 @@ export class CatalogService {
         name: existing.name,
         description: existing.description,
         imageUrl: existing.imageUrl,
+        categoryId: existing.categoryId,
       },
       meta: {
         name: updated.name,
         description: updated.description,
         imageUrl: updated.imageUrl,
+        categoryId: updated.categoryId,
       },
     });
 
@@ -606,6 +794,130 @@ export class CatalogService {
     };
   }
 
+  async createCategory(
+    user: RequestUser,
+    body: CreateCategoryRequest,
+  ): Promise<CategoryDto> {
+    const name = body.name?.trim();
+    if (!name) {
+      throw new BadRequestException("name is required");
+    }
+
+    const parentId = await this.resolveParentCategoryId(
+      user.organizationId,
+      body.parentId,
+    );
+
+    const duplicate = await this.prisma.category.findFirst({
+      where: {
+        organizationId: user.organizationId,
+        name: { equals: name, mode: "insensitive" },
+      },
+      select: { id: true },
+    });
+    if (duplicate) {
+      throw new ConflictException(`Category already exists: ${name}`);
+    }
+
+    const created = await this.prisma.category.create({
+      data: {
+        organizationId: user.organizationId,
+        name,
+        parentId,
+      },
+    });
+
+    await this.audit.log({
+      action: "catalog.category.create",
+      entityType: "Category",
+      entityId: created.id,
+      userId: user.userId,
+      orgId: user.organizationId,
+      meta: {
+        name: created.name,
+        parentId: created.parentId,
+      },
+    });
+
+    return {
+      id: created.id,
+      name: created.name,
+      parentId: created.parentId,
+    };
+  }
+
+  async updateCategory(
+    user: RequestUser,
+    categoryId: string,
+    body: UpdateCategoryRequest,
+  ): Promise<CategoryDto> {
+    const existing = await this.prisma.category.findFirst({
+      where: { id: categoryId, organizationId: user.organizationId },
+    });
+    if (!existing) {
+      throw new NotFoundException("Category not found");
+    }
+
+    const name =
+      body.name !== undefined ? body.name.trim() : undefined;
+    if (body.name !== undefined && !name) {
+      throw new BadRequestException("name cannot be empty");
+    }
+
+    if (name) {
+      const duplicate = await this.prisma.category.findFirst({
+        where: {
+          organizationId: user.organizationId,
+          name: { equals: name, mode: "insensitive" },
+          NOT: { id: existing.id },
+        },
+        select: { id: true },
+      });
+      if (duplicate) {
+        throw new ConflictException(`Category already exists: ${name}`);
+      }
+    }
+
+    const parentId =
+      body.parentId !== undefined
+        ? await this.resolveParentCategoryId(
+            user.organizationId,
+            body.parentId,
+            existing.id,
+          )
+        : undefined;
+
+    const updated = await this.prisma.category.update({
+      where: { id: existing.id },
+      data: {
+        ...(name !== undefined ? { name } : {}),
+        ...(body.parentId !== undefined ? { parentId } : {}),
+      },
+    });
+
+    await this.audit.log({
+      action: "catalog.category.update",
+      entityType: "Category",
+      entityId: updated.id,
+      userId: user.userId,
+      orgId: user.organizationId,
+      before: {
+        name: existing.name,
+        parentId: existing.parentId,
+      },
+      meta: {
+        name: updated.name,
+        parentId: updated.parentId,
+      },
+    });
+
+    return {
+      id: updated.id,
+      name: updated.name,
+      parentId: updated.parentId,
+    };
+  }
+
   async listBrands(organizationId: string): Promise<BrandListResponse> {
     const rows = await this.prisma.brand.findMany({
       where: { organizationId },
@@ -664,4 +976,129 @@ export class CatalogService {
       quantityAvailable: toDecimalString(onHand.minus(reserved)),
     };
   }
+
+  private async resolveBrandId(
+    tx: Prisma.TransactionClient,
+    organizationId: string,
+    brandId?: string,
+    brandName?: string,
+  ): Promise<string | null> {
+    const id = brandId?.trim();
+    if (id) {
+      const existing = await tx.brand.findFirst({
+        where: { id, organizationId },
+        select: { id: true },
+      });
+      if (!existing) {
+        throw new BadRequestException("brandId not found in organization");
+      }
+      return existing.id;
+    }
+
+    const name = brandName?.trim();
+    if (!name) return null;
+
+    const found = await tx.brand.findFirst({
+      where: {
+        organizationId,
+        name: { equals: name, mode: "insensitive" },
+      },
+      select: { id: true },
+    });
+    if (found) return found.id;
+
+    try {
+      const created = await tx.brand.create({
+        data: { organizationId, name },
+        select: { id: true },
+      });
+      return created.id;
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === "P2002"
+      ) {
+        const raced = await tx.brand.findFirst({
+          where: {
+            organizationId,
+            name: { equals: name, mode: "insensitive" },
+          },
+          select: { id: true },
+        });
+        if (raced) return raced.id;
+      }
+      throw err;
+    }
+  }
+
+  private async resolveCategoryId(
+    tx: Prisma.TransactionClient,
+    organizationId: string,
+    categoryId?: string | null,
+    categoryName?: string | null,
+  ): Promise<string | null> {
+    const id = categoryId?.trim();
+    if (id) {
+      const existing = await tx.category.findFirst({
+        where: { id, organizationId },
+        select: { id: true },
+      });
+      if (!existing) {
+        throw new BadRequestException("categoryId not found in organization");
+      }
+      return existing.id;
+    }
+
+    const name = categoryName?.trim();
+    if (!name) return null;
+
+    const found = await tx.category.findFirst({
+      where: {
+        organizationId,
+        name: { equals: name, mode: "insensitive" },
+      },
+      select: { id: true },
+    });
+    if (found) return found.id;
+
+    const created = await tx.category.create({
+      data: { organizationId, name },
+      select: { id: true },
+    });
+    return created.id;
+  }
+
+  /**
+   * Validate optional parent category within org.
+   * `null` / omitted empty clears parent; self-parent is rejected.
+   */
+  private async resolveParentCategoryId(
+    organizationId: string,
+    parentId: string | null | undefined,
+    selfId?: string,
+  ): Promise<string | null> {
+    if (parentId === undefined || parentId === null) {
+      return null;
+    }
+    const id = parentId.trim();
+    if (!id) return null;
+    if (selfId && id === selfId) {
+      throw new BadRequestException("category cannot be its own parent");
+    }
+    const parent = await this.prisma.category.findFirst({
+      where: { id, organizationId },
+      select: { id: true },
+    });
+    if (!parent) {
+      throw new BadRequestException("parentId not found in organization");
+    }
+    return parent.id;
+  }
+}
+
+function guessBarcodeSymbology(value: string): string {
+  if (/^\d{13}$/.test(value)) return "EAN13";
+  if (/^\d{12}$/.test(value)) return "UPCA";
+  if (/^\d{8}$/.test(value)) return "EAN8";
+  return "CODE128";
 }

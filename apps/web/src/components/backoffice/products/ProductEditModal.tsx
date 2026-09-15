@@ -12,6 +12,7 @@ import {
 import type { ProductListItemDto, UpdateProductRequest } from "@gulio/contracts";
 import { formatMoney } from "@/lib/money";
 import { ApiError, apiFetch } from "@/lib/api";
+import { CategorySelect } from "./CategorySelect";
 import {
   ProductImageField,
   productImagePreviewSrc,
@@ -20,7 +21,6 @@ import {
 type Props = {
   product: ProductListItemDto | null;
   isOpen: boolean;
-  localOnly?: boolean;
   onClose: () => void;
   onSaved: (product: ProductListItemDto) => void;
 };
@@ -38,12 +38,12 @@ const inputClass =
 export function ProductEditModal({
   product,
   isOpen,
-  localOnly = false,
   onClose,
   onSaved,
 }: Props) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [categoryId, setCategoryId] = useState("");
   const [imageUrl, setImageUrl] = useState("");
   const [previewBroken, setPreviewBroken] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -53,6 +53,7 @@ export function ProductEditModal({
     if (!product || !isOpen) return;
     setName(product.name);
     setDescription(product.description ?? "");
+    setCategoryId(product.category?.id ?? "");
     setImageUrl(product.imageUrl ?? "");
     setPreviewBroken(false);
     setError(null);
@@ -80,22 +81,16 @@ export function ProductEditModal({
     setSaving(true);
     setError(null);
     try {
+      const prevCategoryId = product.category?.id ?? null;
+      const nextCategoryId = categoryId || null;
       const body: UpdateProductRequest = {
         name: trimmedName,
         description: description.trim() || null,
         imageUrl: trimmedUrl || null,
+        ...(prevCategoryId !== nextCategoryId
+          ? { categoryId: nextCategoryId }
+          : {}),
       };
-
-      if (localOnly) {
-        onSaved({
-          ...product,
-          name: body.name ?? product.name,
-          description: body.description ?? null,
-          imageUrl: body.imageUrl ?? null,
-        });
-        onClose();
-        return;
-      }
 
       const updated = await apiFetch<ProductListItemDto>(
         `/catalog/products/${product.id}`,
@@ -150,7 +145,6 @@ export function ProductEditModal({
                   </div>
                 ) : null}
 
-                {/* Media + core fields */}
                 <div className="flex gap-4">
                   <div className="relative h-[108px] w-[108px] shrink-0 overflow-hidden rounded-2xl border border-gulio-border bg-gulio-bg shadow-sm ring-1 ring-black/5">
                     {previewSrc ? (
@@ -192,24 +186,38 @@ export function ProductEditModal({
 
                     <div className="space-y-1">
                       <label
-                        htmlFor="edit-product-description"
+                        htmlFor="edit-product-category"
                         className="block text-xs font-semibold uppercase tracking-wide text-gulio-muted"
                       >
-                        Description
+                        Category
                       </label>
-                      <textarea
-                        id="edit-product-description"
-                        value={description}
-                        onChange={(e) => setDescription(e.target.value)}
-                        placeholder="Short note for staff…"
-                        rows={2}
-                        className={`${inputClass} min-h-[68px] resize-none`}
+                      <CategorySelect
+                        id="edit-product-category"
+                        value={categoryId}
+                        onChange={setCategoryId}
+                        disabled={saving}
                       />
                     </div>
                   </div>
                 </div>
 
-                {/* Image source — compact */}
+                <div className="space-y-1">
+                  <label
+                    htmlFor="edit-product-description"
+                    className="block text-xs font-semibold uppercase tracking-wide text-gulio-muted"
+                  >
+                    Description
+                  </label>
+                  <textarea
+                    id="edit-product-description"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="Short note for staff…"
+                    rows={2}
+                    className={`${inputClass} min-h-[68px] resize-none`}
+                  />
+                </div>
+
                 <div className="rounded-2xl border border-gulio-border bg-slate-50/80 p-3">
                   <ProductImageField
                     id="edit-product-image"
@@ -221,7 +229,6 @@ export function ProductEditModal({
                   />
                 </div>
 
-                {/* Variants — one line, not a full table */}
                 <p className="text-xs leading-relaxed text-gulio-muted">
                   <span className="font-semibold text-gulio-text">
                     {variantCount} variant{variantCount === 1 ? "" : "s"}

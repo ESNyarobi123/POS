@@ -9,8 +9,13 @@ import {
   ModalFooter,
   ModalHeader,
 } from "@heroui/react";
-import type { ProductListItemDto } from "@gulio/contracts";
+import type {
+  CreateProductRequest,
+  ProductListItemDto,
+} from "@gulio/contracts";
 import { formatMoney } from "@/lib/money";
+import { ApiError, apiFetch } from "@/lib/api";
+import { CategorySelect } from "./CategorySelect";
 import {
   ProductImageField,
   productImagePreviewSrc,
@@ -58,7 +63,7 @@ export function ProductCreateModal({ isOpen, onClose, onCreated }: Props) {
   const [step, setStep] = useState<Step>(1);
   const [name, setName] = useState("");
   const [brand, setBrand] = useState("");
-  const [category, setCategory] = useState("");
+  const [categoryId, setCategoryId] = useState("");
   const [description, setDescription] = useState("");
   const [variantName, setVariantName] = useState("");
   const [sku, setSku] = useState("");
@@ -75,7 +80,7 @@ export function ProductCreateModal({ isOpen, onClose, onCreated }: Props) {
     setStep(1);
     setName("");
     setBrand("");
-    setCategory("");
+    setCategoryId("");
     setDescription("");
     setVariantName("");
     setSku("");
@@ -157,38 +162,30 @@ export function ProductCreateModal({ isOpen, onClose, onCreated }: Props) {
     setSaving(true);
     setError(null);
     try {
-      // Create API not shipped yet — local catalog item for UI flow
-      const id = `local-${Date.now()}`;
-      const variantId = `${id}-v1`;
-      const price = priceNormalized!;
-      const created: ProductListItemDto = {
-        id,
+      const body: CreateProductRequest = {
         name: name.trim(),
         description: description.trim() || null,
         imageUrl: imageUrl.trim() || null,
-        isActive: true,
-        brand: brand.trim()
-          ? { id: `${id}-brand`, name: brand.trim() }
-          : null,
-        category: category.trim()
-          ? { id: `${id}-cat`, name: category.trim(), parentId: null }
-          : null,
-        variants: [
-          {
-            id: variantId,
-            sku: sku.trim().toUpperCase(),
-            name: variantName.trim(),
-            attributes: {},
-            sellPrice: price,
-            requiresSerial: tracksSerial,
-            isActive: true,
-            primaryBarcode: barcode.trim() || null,
-            imageUrl: null,
-          },
-        ],
+        ...(brand.trim() ? { brandName: brand.trim() } : {}),
+        ...(categoryId ? { categoryId } : {}),
+        variant: {
+          name: variantName.trim(),
+          sku: sku.trim(),
+          sellPrice: priceNormalized!,
+          requiresSerial: tracksSerial,
+          barcode: barcode.trim() || null,
+        },
       };
+      const created = await apiFetch<ProductListItemDto>(
+        "/catalog/products",
+        { method: "POST", body },
+      );
       onCreated(created);
       onClose();
+    } catch (e) {
+      setError(
+        e instanceof ApiError ? e.message : "Could not create product",
+      );
     } finally {
       setSaving(false);
     }
@@ -294,12 +291,11 @@ export function ProductCreateModal({ isOpen, onClose, onCreated }: Props) {
                       />
                     </Field>
                     <Field label="Category" htmlFor="create-category">
-                      <input
+                      <CategorySelect
                         id="create-category"
-                        value={category}
-                        onChange={(e) => setCategory(e.target.value)}
-                        placeholder="e.g. Phones"
-                        className={inputClass}
+                        value={categoryId}
+                        onChange={setCategoryId}
+                        disabled={saving}
                       />
                     </Field>
                   </div>
@@ -407,7 +403,10 @@ export function ProductCreateModal({ isOpen, onClose, onCreated }: Props) {
                         {name.trim() || "Untitled product"}
                       </p>
                       <p className="truncate text-xs text-gulio-muted">
-                        {[brand.trim(), category.trim()]
+                        {[
+                          brand.trim() || null,
+                          categoryId ? "Category set" : null,
+                        ]
                           .filter(Boolean)
                           .join(" · ") || "No brand / category"}
                       </p>
@@ -450,7 +449,7 @@ export function ProductCreateModal({ isOpen, onClose, onCreated }: Props) {
                   </div>
 
                   <p className="text-xs text-gulio-muted">
-                    Creates locally for now — catalog create API ships next.
+                    Saves to your live catalog — available on POS after create.
                   </p>
                 </div>
               ) : null}

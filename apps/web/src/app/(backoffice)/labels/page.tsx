@@ -7,8 +7,18 @@ import type {
   EnsureVariantBarcodeResponse,
   ProductListResponse,
 } from "@gulio/contracts";
+import {
+  Minus,
+  Plus,
+  Printer,
+  QrCode,
+  Search,
+  Tag,
+  Trash2,
+} from "lucide-react";
 import { EmptyState } from "@/components/backoffice/EmptyState";
 import { PageHeader } from "@/components/backoffice/PageHeader";
+import { ProductThumb } from "@/components/backoffice/ProductThumb";
 import { CreateLabelsModal } from "@/components/backoffice/labels/CreateLabelsModal";
 import {
   ProductLabelCard,
@@ -20,10 +30,10 @@ import { formatMoney } from "@/lib/money";
 import { PermissionCode, usePermissions } from "@/lib/permissions";
 
 const btnPrimary =
-  "inline-flex min-h-touch items-center rounded-md border-2 border-teal-700 bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:border-teal-800 hover:bg-teal-700 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex min-h-touch items-center justify-center gap-2 rounded-md border-2 border-teal-700 bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:border-teal-800 hover:bg-teal-700 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50";
 
 const btnSecondary =
-  "inline-flex min-h-touch items-center rounded-md border-2 border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-gulio-text shadow-sm transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex min-h-touch items-center justify-center gap-2 rounded-md border-2 border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-gulio-text shadow-sm transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50";
 
 type CatalogRow = {
   variantId: string;
@@ -191,6 +201,23 @@ function LabelsPageInner() {
     }
   }
 
+  function setCopies(key: string, copies: number) {
+    const next = Math.max(1, Math.min(50, Math.floor(copies)));
+    setLabels((prev) =>
+      prev.map((l) => (l.key === key ? { ...l, copies: next } : l)),
+    );
+  }
+
+  function removeLabel(key: string) {
+    setLabels((prev) => {
+      const next = prev.filter((l) => l.key !== key);
+      if (selectedPreview === key) {
+        setSelectedPreview(next[0]?.key ?? null);
+      }
+      return next;
+    });
+  }
+
   function handlePrint() {
     if (printSheets.length === 0) return;
     window.print();
@@ -210,7 +237,7 @@ function LabelsPageInner() {
       <div className="labels-no-print">
         <PageHeader
           title="Barcode labels"
-          subtitle="Code 128 + QR (variant id only) — scan always fetches live price"
+          subtitle="Pick variants → preview Code 128 + QR → print. QR is variant id only; price is shelf display."
           actions={
             <div className="flex flex-wrap gap-2">
               <button
@@ -221,6 +248,7 @@ function LabelsPageInner() {
                 }}
                 className={btnPrimary}
               >
+                <Tag className="h-4 w-4" />
                 Create labels
               </button>
               <button
@@ -229,6 +257,7 @@ function LabelsPageInner() {
                 disabled={printSheets.length === 0}
                 className={btnSecondary}
               >
+                <Printer className="h-4 w-4" />
                 Print ({printSheets.length})
               </button>
             </div>
@@ -242,16 +271,19 @@ function LabelsPageInner() {
         ) : null}
       </div>
 
-      <div className="labels-no-print grid min-h-0 flex-1 gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
+      <div className="labels-no-print grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="min-w-0 space-y-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search catalog for labels…"
-              className="min-w-[200px] flex-1 rounded-xl border border-gulio-border bg-gulio-card px-3.5 py-2.5 text-sm outline-none ring-gulio-primary focus:ring-2"
-            />
+          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-gulio-border bg-gulio-card p-3 shadow-sm">
+            <div className="relative min-w-[200px] flex-1">
+              <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gulio-muted" />
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search name, SKU, barcode…"
+                className="min-h-touch w-full rounded-xl border border-gulio-border bg-white py-2.5 pl-10 pr-3.5 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20"
+              />
+            </div>
             <div className="inline-flex rounded-md border-2 border-slate-200 bg-white p-0.5">
               {(
                 [
@@ -273,12 +305,12 @@ function LabelsPageInner() {
                 </button>
               ))}
             </div>
-            <label className="flex items-center gap-2 text-sm text-gulio-text">
+            <label className="flex min-h-9 items-center gap-2 rounded-lg px-2 text-sm text-gulio-text">
               <input
                 type="checkbox"
                 checked={showPrice}
                 onChange={(e) => setShowPrice(e.target.checked)}
-                className="rounded border-gulio-border text-teal-600"
+                className="h-4 w-4 rounded border-gulio-border text-teal-600 accent-teal-600"
               />
               Shelf price
             </label>
@@ -289,7 +321,7 @@ function LabelsPageInner() {
               {Array.from({ length: 6 }).map((_, i) => (
                 <div
                   key={i}
-                  className="h-11 animate-pulse rounded-lg bg-gulio-bg"
+                  className="h-14 animate-pulse rounded-lg bg-gulio-bg"
                 />
               ))}
             </div>
@@ -297,10 +329,20 @@ function LabelsPageInner() {
             <EmptyState
               title="No variants"
               description="Add products in catalog first, then create labels here."
+              icon={<Tag className="h-6 w-6" />}
             />
           ) : (
             <div className="overflow-hidden rounded-xl border border-gulio-border bg-gulio-card shadow-sm">
-              <ul className="max-h-[calc(100vh-16rem)] divide-y divide-gulio-border overflow-y-auto">
+              <div className="flex items-center justify-between border-b border-gulio-border bg-gulio-bg px-4 py-2.5">
+                <p className="text-xs font-semibold uppercase tracking-wide text-gulio-muted">
+                  Catalog
+                </p>
+                <p className="text-xs tabular-nums text-gulio-muted">
+                  {filtered.length} variant
+                  {filtered.length === 1 ? "" : "s"}
+                </p>
+              </div>
+              <ul className="max-h-[calc(100vh-18rem)] divide-y divide-gulio-border overflow-y-auto">
                 {filtered.map((row) => {
                   const inTray = labels.some(
                     (l) => l.variantId === row.variantId,
@@ -310,6 +352,10 @@ function LabelsPageInner() {
                       key={row.variantId}
                       className="flex items-center gap-3 px-4 py-3"
                     >
+                      <ProductThumb
+                        imageUrl={row.imageUrl}
+                        name={row.productName}
+                      />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-semibold text-gulio-text">
                           {row.productName}
@@ -320,8 +366,7 @@ function LabelsPageInner() {
                           {row.barcode ? (
                             <>
                               {" "}
-                              ·{" "}
-                              <span className="font-mono">{row.barcode}</span>
+                              · <span className="font-mono">{row.barcode}</span>
                             </>
                           ) : (
                             <span className="text-amber-700">
@@ -331,17 +376,22 @@ function LabelsPageInner() {
                           )}
                         </p>
                       </div>
+                      {row.priceLabel ? (
+                        <span className="hidden shrink-0 text-xs font-semibold tabular-nums text-gulio-text sm:inline">
+                          {row.priceLabel}
+                        </span>
+                      ) : null}
                       <button
                         type="button"
                         disabled={busyEnsure}
                         onClick={() => void quickAdd(row)}
-                        className={`shrink-0 rounded-md border-2 px-3 py-1.5 text-xs font-semibold transition ${
+                        className={`min-h-touch shrink-0 rounded-md border-2 px-3 py-2 text-xs font-semibold transition ${
                           inTray
                             ? "border-teal-600 bg-teal-50 text-teal-800"
                             : "border-slate-200 bg-white text-gulio-text hover:border-teal-500 hover:bg-teal-50"
                         }`}
                       >
-                        {inTray ? "In tray" : "Add label"}
+                        {inTray ? "In tray" : "Add"}
                       </button>
                     </li>
                   );
@@ -352,11 +402,22 @@ function LabelsPageInner() {
         </div>
 
         <aside className="lg:sticky lg:top-4 lg:self-start">
-          <div className="rounded-xl border border-gulio-border bg-gulio-card p-4 shadow-sm">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <p className="text-sm font-semibold text-gulio-text">
-                Print tray
-              </p>
+          <div className="overflow-hidden rounded-xl border border-gulio-border bg-gulio-card shadow-sm">
+            <div className="flex items-center justify-between border-b border-gulio-border px-4 py-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-50 text-teal-700">
+                  <QrCode className="h-4 w-4" />
+                </span>
+                <div>
+                  <p className="text-sm font-semibold text-gulio-text">
+                    Print tray
+                  </p>
+                  <p className="text-[11px] text-gulio-muted">
+                    {printSheets.length} sticker
+                    {printSheets.length === 1 ? "" : "s"}
+                  </p>
+                </div>
+              </div>
               {labels.length > 0 ? (
                 <button
                   type="button"
@@ -371,52 +432,112 @@ function LabelsPageInner() {
               ) : null}
             </div>
 
-            {labels.length === 0 ? (
-              <p className="text-sm text-gulio-muted">
-                Add labels from the list or use{" "}
-                <button
-                  type="button"
-                  onClick={() => setCreateOpen(true)}
-                  className="font-semibold text-teal-700 hover:underline"
-                >
-                  Create labels
-                </button>
-                .
-              </p>
-            ) : (
-              <ul className="mb-4 max-h-48 space-y-1 overflow-y-auto">
-                {labels.map((l) => (
-                  <li key={l.key}>
+            <div className="p-4">
+              {labels.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-gulio-border bg-gulio-bg px-4 py-8 text-center">
+                  <p className="text-sm text-gulio-muted">
+                    Add from the list or{" "}
                     <button
                       type="button"
-                      onClick={() => setSelectedPreview(l.key)}
-                      className={`w-full rounded-lg px-2.5 py-2 text-left text-xs transition ${
-                        previewItem?.key === l.key
-                          ? "bg-teal-50 ring-1 ring-teal-200"
-                          : "hover:bg-gulio-bg"
-                      }`}
+                      onClick={() => setCreateOpen(true)}
+                      className="font-semibold text-teal-700 hover:underline"
                     >
-                      <span className="block truncate font-semibold">
-                        {l.productName}
-                      </span>
-                      <span className="text-gulio-muted">
-                        ×{l.copies} · {l.barcode}
-                      </span>
+                      Create labels
                     </button>
-                  </li>
-                ))}
-              </ul>
-            )}
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {previewItem ? (
+                    <div className="mb-4 flex flex-col items-center rounded-xl border border-gulio-border bg-white p-4">
+                      <p className="mb-3 self-start text-[11px] font-semibold uppercase tracking-wide text-gulio-muted">
+                        Preview
+                      </p>
+                      <ProductLabelCard
+                        item={previewItem}
+                        size={template}
+                        showPrice={showPrice}
+                      />
+                    </div>
+                  ) : null}
 
-            {previewItem ? (
-              <div className="flex justify-center border-t border-gulio-border pt-4">
-                <ProductLabelCard
-                  item={previewItem}
-                  size={template}
-                  showPrice={showPrice}
-                />
-              </div>
-            ) : null}
+                  <ul className="mb-4 max-h-56 space-y-2 overflow-y-auto">
+                    {labels.map((l) => {
+                      const active = previewItem?.key === l.key;
+                      return (
+                        <li
+                          key={l.key}
+                          className={`rounded-xl border p-2.5 transition ${
+                            active
+                              ? "border-teal-300 bg-teal-50/60"
+                              : "border-gulio-border bg-white"
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => setSelectedPreview(l.key)}
+                            className="w-full text-left"
+                          >
+                            <span className="block truncate text-xs font-semibold text-gulio-text">
+                              {l.productName}
+                            </span>
+                            <span className="font-mono text-[11px] text-gulio-muted">
+                              {l.barcode}
+                            </span>
+                          </button>
+                          <div className="mt-2 flex items-center justify-between gap-2">
+                            <div className="inline-flex items-center gap-0.5 rounded-lg border border-gulio-border bg-white p-0.5">
+                              <button
+                                type="button"
+                                aria-label="Fewer copies"
+                                onClick={() =>
+                                  setCopies(l.key, l.copies - 1)
+                                }
+                                className="flex h-8 w-8 items-center justify-center rounded-md text-gulio-muted hover:bg-slate-50"
+                              >
+                                <Minus className="h-3.5 w-3.5" />
+                              </button>
+                              <span className="min-w-[1.75rem] text-center text-xs font-bold tabular-nums">
+                                {l.copies}
+                              </span>
+                              <button
+                                type="button"
+                                aria-label="More copies"
+                                onClick={() =>
+                                  setCopies(l.key, l.copies + 1)
+                                }
+                                className="flex h-8 w-8 items-center justify-center rounded-md text-gulio-muted hover:bg-slate-50"
+                              >
+                                <Plus className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                            <button
+                              type="button"
+                              aria-label="Remove from tray"
+                              onClick={() => removeLabel(l.key)}
+                              className="flex h-8 w-8 items-center justify-center rounded-md text-gulio-muted hover:bg-rose-50 hover:text-rose-700"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+
+                  <button
+                    type="button"
+                    onClick={handlePrint}
+                    disabled={printSheets.length === 0}
+                    className={`${btnPrimary} w-full`}
+                  >
+                    <Printer className="h-4 w-4" />
+                    Print {printSheets.length} sticker
+                    {printSheets.length === 1 ? "" : "s"}
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         </aside>
       </div>

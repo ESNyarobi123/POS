@@ -143,7 +143,11 @@ export function CreateLabelsModal({
       setError("Select at least one variant");
       return;
     }
-    if (!Number.isFinite(copiesNum) || copiesNum < 1 || !Number.isInteger(copiesNum)) {
+    if (
+      !Number.isFinite(copiesNum) ||
+      copiesNum < 1 ||
+      !Number.isInteger(copiesNum)
+    ) {
       setError("Copies must be a whole number ≥ 1");
       return;
     }
@@ -211,7 +215,7 @@ export function CreateLabelsModal({
                 Create labels
               </span>
               <span className="text-sm font-normal text-gulio-muted">
-                Select variants · ensure Code 128 · QR = variant id only
+                Pick variants → ensure Code 128 → QR carries variant id only
               </span>
             </ModalHeader>
 
@@ -223,14 +227,14 @@ export function CreateLabelsModal({
               ) : null}
 
               <div className="grid gap-3 sm:grid-cols-[1fr_120px]">
-                <Field label="Search" htmlFor="label-search">
+                <Field label="Search variants" htmlFor="label-search">
                   <input
                     id="label-search"
                     type="search"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     placeholder="Name, SKU, barcode…"
-                    className={inputClass}
+                    className={`${inputClass} min-h-touch`}
                     autoFocus
                   />
                 </Field>
@@ -240,88 +244,100 @@ export function CreateLabelsModal({
                     inputMode="numeric"
                     value={copies}
                     onChange={(e) => setCopies(e.target.value)}
-                    className={`${inputClass} tabular-nums`}
+                    className={`${inputClass} min-h-touch tabular-nums`}
                   />
                 </Field>
               </div>
 
-              <div className="max-h-[340px] overflow-y-auto rounded-xl border border-gulio-border">
-                {loading ? (
-                  <div className="space-y-2 p-3">
-                    {Array.from({ length: 5 }).map((_, i) => (
-                      <div
-                        key={i}
-                        className="h-12 animate-pulse rounded-lg bg-gulio-bg"
-                      />
-                    ))}
-                  </div>
-                ) : filtered.length === 0 ? (
-                  <p className="px-4 py-8 text-center text-sm text-gulio-muted">
-                    No variants found
+              <div className="overflow-hidden rounded-xl border border-gulio-border">
+                <div className="flex items-center justify-between border-b border-gulio-border bg-gulio-bg px-3.5 py-2">
+                  <p className="text-xs font-semibold text-gulio-muted">
+                    Catalog
                   </p>
-                ) : (
-                  <ul className="divide-y divide-gulio-border">
-                    {filtered.map((v) => {
-                      const on = selected.has(v.variantId);
-                      return (
-                        <li key={v.variantId}>
-                          <button
-                            type="button"
-                            onClick={() => toggle(v.variantId)}
-                            className={`flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition ${
-                              on ? "bg-teal-50/80" : "hover:bg-slate-50"
-                            }`}
-                          >
-                            <span
-                              className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border-2 text-[10px] font-bold ${
-                                on
-                                  ? "border-teal-600 bg-teal-600 text-white"
-                                  : "border-slate-300 bg-white text-transparent"
+                  <p className="text-xs font-semibold tabular-nums text-gulio-text">
+                    {selected.size} selected
+                  </p>
+                </div>
+                <div className="max-h-[320px] overflow-y-auto">
+                  {loading ? (
+                    <div className="space-y-2 p-3">
+                      {Array.from({ length: 5 }).map((_, i) => (
+                        <div
+                          key={i}
+                          className="h-12 animate-pulse rounded-lg bg-gulio-bg"
+                        />
+                      ))}
+                    </div>
+                  ) : filtered.length === 0 ? (
+                    <p className="px-4 py-8 text-center text-sm text-gulio-muted">
+                      No variants found
+                    </p>
+                  ) : (
+                    <ul className="divide-y divide-gulio-border">
+                      {filtered.map((v) => {
+                        const on = selected.has(v.variantId);
+                        return (
+                          <li key={v.variantId}>
+                            <button
+                              type="button"
+                              onClick={() => toggle(v.variantId)}
+                              className={`flex min-h-touch w-full items-center gap-3 px-3.5 py-3 text-left transition ${
+                                on ? "bg-teal-50/80" : "hover:bg-slate-50"
                               }`}
                             >
-                              ✓
-                            </span>
-                            <ProductThumb
-                              imageUrl={v.imageUrl}
-                              name={v.productName}
-                            />
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-semibold">
-                                {v.productName}
-                              </p>
-                              <p className="truncate text-xs text-gulio-muted">
-                                {v.variantName} ·{" "}
-                                <span className="font-mono">{v.sku}</span>
-                                {v.primaryBarcode ? (
-                                  <>
-                                    {" "}
-                                    ·{" "}
-                                    <span className="font-mono">
-                                      {v.primaryBarcode}
+                              <span
+                                className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border-2 text-[10px] font-bold ${
+                                  on
+                                    ? "border-teal-600 bg-teal-600 text-white"
+                                    : "border-slate-300 bg-white text-transparent"
+                                }`}
+                              >
+                                ✓
+                              </span>
+                              <ProductThumb
+                                imageUrl={v.imageUrl}
+                                name={v.productName}
+                              />
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm font-semibold">
+                                  {v.productName}
+                                </p>
+                                <p className="truncate text-xs text-gulio-muted">
+                                  {v.variantName} ·{" "}
+                                  <span className="font-mono">{v.sku}</span>
+                                  {v.primaryBarcode ? (
+                                    <>
+                                      {" "}
+                                      ·{" "}
+                                      <span className="font-mono">
+                                        {v.primaryBarcode}
+                                      </span>
+                                    </>
+                                  ) : (
+                                    <span className="text-amber-700">
+                                      {" "}
+                                      · will create Code 128
                                     </span>
-                                  </>
-                                ) : (
-                                  <span className="text-amber-700">
-                                    {" "}
-                                    · will create Code 128
-                                  </span>
-                                )}
-                              </p>
-                            </div>
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
+                                  )}
+                                </p>
+                              </div>
+                              {v.price != null ? (
+                                <span className="shrink-0 text-xs font-semibold tabular-nums text-gulio-text">
+                                  {formatMoney(v.price)}
+                                </span>
+                              ) : null}
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
               </div>
 
-              <p className="text-xs text-gulio-muted">
-                Selected:{" "}
-                <span className="font-semibold text-gulio-text">
-                  {selected.size}
-                </span>{" "}
-                · shelf price is display-only; QR never carries price
+              <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-gulio-muted">
+                Shelf price is display-only on the sticker. QR encodes variant
+                identity — scan always fetches live price.
               </p>
             </ModalBody>
 
@@ -340,9 +356,10 @@ export function CreateLabelsModal({
                 radius="md"
                 onPress={() => void handleCreate()}
                 isLoading={saving}
+                isDisabled={selected.size === 0}
                 className={btnPrimary}
               >
-                Create labels
+                Add to tray ({selected.size})
               </Button>
             </ModalFooter>
           </>

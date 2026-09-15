@@ -151,6 +151,14 @@ function IconProducts(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+function IconCategories(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" {...props}>
+      <path d="M4 5h6v6H4V5zM14 5h6v6h-6V5zM4 13h6v6H4v-6zM14 13h6v6h-6v-6z" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function IconInventory(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" {...props}>
@@ -288,6 +296,13 @@ const navItems: NavItem[] = [
     label: "Products",
     accent: "teal",
     icon: IconProducts,
+    permission: PermissionCode.CATALOG_VIEW,
+  },
+  {
+    href: "/categories",
+    label: "Categories",
+    accent: "cyan",
+    icon: IconCategories,
     permission: PermissionCode.CATALOG_VIEW,
   },
   {

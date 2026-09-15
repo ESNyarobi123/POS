@@ -13,10 +13,14 @@ import {
 import { PermissionCode } from "@gulio/contracts";
 import type {
   BrandListResponse,
+  CategoryDto,
   CategoryListResponse,
+  CreateCategoryRequest,
+  CreateProductRequest,
   EnsureVariantBarcodeResponse,
   ProductListItemDto,
   ProductListResponse,
+  UpdateCategoryRequest,
   UpdateProductRequest,
   VariantDetailDto,
   VariantLookupResponse,
@@ -61,6 +65,15 @@ export class CatalogController {
       categoryId,
       limit,
     });
+  }
+
+  @Post("products")
+  @Permissions(PermissionCode.CATALOG_MANAGE)
+  createProduct(
+    @CurrentUser() user: RequestUser,
+    @Body() body: CreateProductRequest,
+  ): Promise<ProductListItemDto> {
+    return this.catalogService.createProduct(user, body ?? ({} as CreateProductRequest));
   }
 
   @Get("products/:id")
@@ -134,6 +147,28 @@ export class CatalogController {
     @CurrentUser() user: RequestUser,
   ): Promise<CategoryListResponse> {
     return this.catalogService.listCategories(user.organizationId);
+  }
+
+  @Post("categories")
+  @Permissions(PermissionCode.CATALOG_MANAGE)
+  createCategory(
+    @CurrentUser() user: RequestUser,
+    @Body() body: CreateCategoryRequest,
+  ): Promise<CategoryDto> {
+    return this.catalogService.createCategory(
+      user,
+      body ?? ({} as CreateCategoryRequest),
+    );
+  }
+
+  @Patch("categories/:id")
+  @Permissions(PermissionCode.CATALOG_MANAGE)
+  updateCategory(
+    @CurrentUser() user: RequestUser,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() body: UpdateCategoryRequest,
+  ): Promise<CategoryDto> {
+    return this.catalogService.updateCategory(user, id, body ?? {});
   }
 
   @Get("brands")

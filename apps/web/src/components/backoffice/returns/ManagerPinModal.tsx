@@ -72,9 +72,9 @@ export function ManagerPinModal({
             <ModalBody className="gap-4 !bg-white py-3">
               <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
-                  Refund above TZS 500,000
+                  Large refund approval
                 </p>
-                <p className="mt-1 text-2xl font-bold tabular-nums text-amber-950">
+                <p className="mt-1 text-2xl font-bold tabular-nums tracking-tight text-amber-950">
                   {formatMoney(amount)}
                 </p>
               </div>

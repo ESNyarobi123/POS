@@ -115,8 +115,45 @@ export type ListProductsQuery = {
   limit?: number;
 };
 
+export type CreateCategoryRequest = {
+  name: string;
+  parentId?: string | null;
+};
+
+export type UpdateCategoryRequest = {
+  name?: string;
+  parentId?: string | null;
+};
+
 export type UpdateProductRequest = {
   name?: string;
   description?: string | null;
   imageUrl?: string | null;
+  /** Existing category id; null clears. Prefer over categoryName when both set. */
+  categoryId?: string | null;
+  /** Find-or-create by name within org; null clears when categoryId omitted. */
+  categoryName?: string | null;
+};
+
+/**
+ * Create product with one initial variant.
+ * Brand/category: pass existing id and/or free-text name (find-or-create by name within org).
+ * Money fields are decimal strings (never JS float).
+ */
+export type CreateProductRequest = {
+  name: string;
+  description?: string | null;
+  imageUrl?: string | null;
+  brandId?: string;
+  brandName?: string;
+  categoryId?: string;
+  categoryName?: string;
+  variant: {
+    name: string;
+    sku: string;
+    sellPrice: DecimalString;
+    /** Maps to Variant.tracksSerial */
+    requiresSerial?: boolean;
+    barcode?: string | null;
+  };
 };

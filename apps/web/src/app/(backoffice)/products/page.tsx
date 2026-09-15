@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import {
   Suspense,
   useCallback,
@@ -37,7 +38,6 @@ import {
 import { ApiError, apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
 import { formatMoney } from "@/lib/money";
-import { formatTzs, products as mockProducts } from "@/lib/mock-data";
 import {
   PermissionCode,
   RequirePermission,
@@ -88,40 +88,6 @@ function flattenProducts(items: ProductListItemDto[]): CatalogRow[] {
   return rows;
 }
 
-function mockCatalogProducts(query: string): ProductListItemDto[] {
-  const q = query.trim().toLowerCase();
-  return mockProducts
-    .filter(
-      (p) =>
-        !q ||
-        p.name.toLowerCase().includes(q) ||
-        p.sku.toLowerCase().includes(q) ||
-        p.variant.toLowerCase().includes(q),
-    )
-    .map((p) => ({
-      id: p.id,
-      name: p.name,
-      description: null,
-      imageUrl: p.imageUrl ?? null,
-      isActive: true,
-      brand: null,
-      category: { id: p.category, name: p.category, parentId: null },
-      variants: [
-        {
-          id: `${p.id}-v`,
-          sku: p.sku,
-          name: p.variant,
-          attributes: {},
-          sellPrice: String(Math.trunc(p.priceMinor / 100)),
-          requiresSerial: p.tracksSerial,
-          isActive: true,
-          primaryBarcode: p.barcode,
-          imageUrl: p.imageUrl ?? null,
-        },
-      ],
-    }));
-}
-
 export default function ProductsPage() {
   return (
     <Suspense
@@ -145,7 +111,6 @@ function ProductsPageInner() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [products, setProducts] = useState<ProductListItemDto[]>([]);
-  const [usingMock, setUsingMock] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [viewProductId, setViewProductId] = useState<string | null>(null);
@@ -240,7 +205,6 @@ function ProductsPageInner() {
       ]);
       setProducts(res.items);
       setSales(salesRes);
-      setUsingMock(false);
       setSelectedKey((prev) => {
         const next = flattenProducts(res.items);
         return prev && next.some((r) => r.key === prev) ? prev : null;
@@ -259,20 +223,15 @@ function ProductsPageInner() {
         setBalances([]);
       }
     } catch (e) {
-      setUsingMock(true);
       setSales([]);
       setBalances([]);
+      setProducts([]);
+      setSelectedKey(null);
       setError(
         e instanceof ApiError
-          ? `${e.message} — showing mock catalog`
-          : "API unavailable — showing mock catalog",
+          ? e.message
+          : "Could not load catalog from API",
       );
-      const mockItems = mockCatalogProducts(query);
-      setProducts(mockItems);
-      setSelectedKey((prev) => {
-        const next = flattenProducts(mockItems);
-        return prev && next.some((r) => r.key === prev) ? prev : null;
-      });
     } finally {
       setLoading(false);
     }
@@ -286,10 +245,8 @@ function ProductsPageInner() {
     if (loading) return "Loading…";
     return `${products.length} product${products.length === 1 ? "" : "s"} · ${
       rows.length
-    } variant${rows.length === 1 ? "" : "s"}${
-      usingMock ? " · mock data" : ""
-    } · ↑↓ select · Esc clear`;
-  }, [loading, products.length, rows.length, usingMock]);
+    } variant${rows.length === 1 ? "" : "s"} · ↑↓ select · Esc clear`;
+  }, [loading, products.length, rows.length]);
 
   const selectByIndex = useCallback(
     (index: number) => {
@@ -329,14 +286,10 @@ function ProductsPageInner() {
     setDeleteBusy(true);
     setDeleteError(null);
     try {
-      if (usingMock) {
-        setProducts((prev) => prev.filter((p) => p.id !== deleteProduct.id));
-      } else {
-        await apiFetch(`/catalog/products/${deleteProduct.id}/archive`, {
-          method: "POST",
-        });
-        await loadCatalog();
-      }
+      await apiFetch(`/catalog/products/${deleteProduct.id}/archive`, {
+        method: "POST",
+      });
+      await loadCatalog();
       setDeleteProductId(null);
     } catch (e) {
       setDeleteError(
@@ -345,7 +298,7 @@ function ProductsPageInner() {
     } finally {
       setDeleteBusy(false);
     }
-  }, [deleteProduct, usingMock, loadCatalog]);
+  }, [deleteProduct, loadCatalog]);
 
   return (
     <div className="flex min-h-[calc(100vh-7.5rem)] flex-col">
@@ -354,13 +307,27 @@ function ProductsPageInner() {
         subtitle="Catalog list — view, edit, or archive each product"
         actions={
           <RequirePermission permission={PermissionCode.CATALOG_MANAGE}>
-            <button
-              type="button"
-              onClick={() => setCreateOpen(true)}
-              className="inline-flex min-h-touch items-center rounded-md border-2 border-teal-700 bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:border-teal-800 hover:bg-teal-700 hover:shadow-md"
-            >
-              New product
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <Link
+                href="/categories"
+                className="inline-flex min-h-touch items-center rounded-md border-2 border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-gulio-text shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
+              >
+                Categories
+              </Link>
+              <Link
+                href="/inventory"
+                className="inline-flex min-h-touch items-center rounded-md border-2 border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-gulio-text shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
+              >
+                Add stock
+              </Link>
+              <button
+                type="button"
+                onClick={() => setCreateOpen(true)}
+                className="inline-flex min-h-touch items-center rounded-md border-2 border-teal-700 bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:border-teal-800 hover:bg-teal-700 hover:shadow-md"
+              >
+                New product
+              </button>
+            </div>
           </RequirePermission>
         }
       />
@@ -509,6 +476,7 @@ function ProductsPageInner() {
         onCreated={(created) => {
           setProducts((prev) => [created, ...prev]);
           setSelectedKey(created.variants[0]?.id ?? created.id);
+          void loadCatalog();
         }}
       />
 
@@ -525,7 +493,6 @@ function ProductsPageInner() {
       <ProductEditModal
         product={editProduct}
         isOpen={Boolean(editProduct)}
-        localOnly={usingMock}
         onClose={() => setEditProductId(null)}
         onSaved={(updated) => {
           setProducts((prev) =>

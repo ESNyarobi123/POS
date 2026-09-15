@@ -73,10 +73,7 @@ export function ProductLabelCard({
       </p>
 
       <div className="mt-2 flex flex-col items-center gap-1">
-        <LabelQrCode
-          payload={item.qrPayload}
-          size={compact ? 52 : 68}
-        />
+        <LabelQrCode payload={item.qrPayload} size={compact ? 52 : 68} />
         <p className="max-w-full truncate px-1 text-[8px] text-gulio-muted">
           Scan → live price · never from QR
         </p>

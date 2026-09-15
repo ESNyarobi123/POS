@@ -12,7 +12,6 @@ import {
 import { useSearchParams } from "next/navigation";
 import type {
   CreateReturnRequest,
-  ReturnDisposition,
   ReturnDto,
   ReturnListResponse,
   ReturnableSaleDto,
@@ -27,7 +26,6 @@ import {
   RotateCcw,
   ScanLine,
   Search,
-  ShieldCheck,
   Smartphone,
 } from "lucide-react";
 import { EmptyState } from "@/components/backoffice/EmptyState";
@@ -40,6 +38,12 @@ import {
   DataTableRow,
 } from "@/components/backoffice/DataTable";
 import { ManagerPinModal } from "@/components/backoffice/returns/ManagerPinModal";
+import { ReturnFlowStepper } from "@/components/backoffice/returns/ReturnFlowStepper";
+import {
+  ReturnLineCard,
+  matchSoldImei,
+  type LineDraft,
+} from "@/components/backoffice/returns/ReturnLineCard";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
 import { formatMoney } from "@/lib/money";
@@ -59,30 +63,12 @@ const btnSecondary =
 const inputClass =
   "w-full rounded-xl border border-gulio-border bg-white px-3.5 py-2.5 text-sm text-gulio-text outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20";
 
-type LineDraft = {
-  selected: boolean;
-  quantity: number;
-  disposition: ReturnDisposition;
-  serialUnitId: string | null;
-  imeiScan: string;
-};
-
 const REASONS = [
-  { value: "DEFECTIVE", label: "Defective / DOA", hint: "Does not power on or failed QC" },
-  { value: "WRONG_ITEM", label: "Wrong item", hint: "Sold the wrong variant or SKU" },
-  { value: "CHANGED_MIND", label: "Change of mind", hint: "Customer no longer wants it" },
-  { value: "WARRANTY", label: "Warranty claim", hint: "In-warranty swap or repair" },
+  { value: "DEFECTIVE", label: "Defective / DOA" },
+  { value: "WRONG_ITEM", label: "Wrong item" },
+  { value: "CHANGED_MIND", label: "Change of mind" },
+  { value: "WARRANTY", label: "Warranty claim" },
 ] as const;
-
-const DISPOSITIONS: Array<{
-  value: ReturnDisposition;
-  label: string;
-  hint: string;
-}> = [
-  { value: "RESTOCK", label: "Restock", hint: "Back to sellable stock" },
-  { value: "DAMAGE", label: "Damage", hint: "Not for resale" },
-  { value: "WRITE_OFF", label: "Write-off", hint: "Remove from books" },
-];
 
 const REASON_LABEL: Record<string, string> = {
   DEFECTIVE: "Defective / DOA",
@@ -91,21 +77,16 @@ const REASON_LABEL: Record<string, string> = {
   WARRANTY: "Warranty",
 };
 
-function normalizeImei(value: string): string {
-  return value.replace(/[\s-]/g, "").toUpperCase();
-}
-
-function matchSoldImei(
-  item: ReturnableSaleItemDto,
-  scan: string,
-): ReturnableSaleItemDto["serials"][number] | null {
-  const needle = normalizeImei(scan);
-  if (!needle) return null;
-  return (
-    item.serials.find(
-      (s) => s.status === "SOLD" && normalizeImei(s.serialNumber) === needle,
-    ) ?? null
-  );
+/** Proportional line refund in whole TZS (display estimate; API is source of truth). */
+function estimateLineRefund(
+  lineTotal: string,
+  quantitySold: string,
+  qtyReturning: number,
+): number {
+  const line = Number(lineTotal);
+  const sold = Number(quantitySold);
+  if (!Number.isFinite(line) || !Number.isFinite(sold) || sold <= 0) return 0;
+  return Math.round((line * qtyReturning) / sold);
 }
 
 export default function ReturnsPage() {
@@ -248,13 +229,16 @@ function ReturnsPageInner() {
     for (const item of sale.items) {
       const d = drafts[item.saleItemId];
       if (!d?.selected || d.quantity < 1) continue;
-      const sold = Number(item.quantitySold);
-      const line = Number(item.lineTotal);
-      if (!Number.isFinite(sold) || sold <= 0) continue;
-      total += (line * d.quantity) / sold;
+      total += estimateLineRefund(item.lineTotal, item.quantitySold, d.quantity);
     }
     return total;
   }, [sale, drafts]);
+
+  const flowStep: 1 | 2 | 3 = !sale
+    ? 1
+    : selectedLines.length === 0
+      ? 2
+      : 3;
 
   const needsLargePerm = estimatedRefund >= LARGE_REFUND_TZS;
   const imeiPending = selectedLines.some((item) => {
@@ -368,7 +352,7 @@ function ReturnsPageInner() {
       : null;
 
   const refundedTotal = returns.reduce(
-    (sum, r) => sum + Number(r.refundTotal || 0),
+    (sum, r) => sum + Math.round(Number(r.refundTotal || 0)),
     0,
   );
   const restockCount = returns.filter(
@@ -379,7 +363,7 @@ function ReturnsPageInner() {
     <div className="flex min-h-[calc(100vh-7.5rem)] flex-col">
       <PageHeader
         title="Returns / refunds"
-        subtitle="Bring a receipt, match the sold IMEI, then refund through the stock ledger."
+        subtitle="Lookup → select lines → disposition → confirm. IMEI must match the sold device."
         actions={
           <div className="flex flex-wrap gap-2">
             <Link href="/pos" className={btnSecondary}>
@@ -506,7 +490,10 @@ function ReturnsPageInner() {
                   <DataTableCell mono className="px-5 py-3.5 font-semibold">
                     {r.receiptNumber}
                   </DataTableCell>
-                  <DataTableCell tabular className="px-5 py-3.5 font-semibold text-rose-700">
+                  <DataTableCell
+                    tabular
+                    className="px-5 py-3.5 font-semibold text-rose-700"
+                  >
                     {formatMoney(r.refundTotal)}
                   </DataTableCell>
                   <DataTableCell className="px-5 py-3.5">
@@ -542,7 +529,7 @@ function ReturnsPageInner() {
       ) : (
         <div className="space-y-5">
           {success ? (
-            <div className="overflow-hidden rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-6 shadow-sm">
+            <div className="overflow-hidden rounded-xl border border-emerald-200 bg-emerald-50/80 p-6 shadow-sm">
               <div className="flex items-start gap-3">
                 <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white">
                   <CheckCircle2 className="h-6 w-6" />
@@ -555,7 +542,8 @@ function ReturnsPageInner() {
                     Receipt {success.receiptNumber} ·{" "}
                     {REASON_LABEL[success.reasonCode ?? ""] ??
                       success.reasonCode}{" "}
-                    · {success.refundMethod === "MOBILE_MONEY_MANUAL"
+                    ·{" "}
+                    {success.refundMethod === "MOBILE_MONEY_MANUAL"
                       ? "Mobile money"
                       : "Cash"}
                   </p>
@@ -591,44 +579,41 @@ function ReturnsPageInner() {
             </div>
           ) : null}
 
+          {!success ? <ReturnFlowStepper current={flowStep} /> : null}
+
           {formError ? (
             <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
               {formError}
             </div>
           ) : null}
 
-          <div className="relative overflow-hidden rounded-2xl border border-gulio-border bg-[#0f172a] p-5 shadow-sm sm:p-6">
-            <div
-              className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-teal-500/20 blur-2xl"
-              aria-hidden
-            />
-            <div className="relative">
-              <p className="text-xs font-semibold uppercase tracking-wider text-teal-300">
-                Step 1 · Find the sale
-              </p>
-              <h2 className="mt-1 text-lg font-bold text-white">
-                Search receipt
-              </h2>
-              <p className="mt-1 max-w-xl text-sm text-slate-300">
-                Scan or type the receipt number from the original sale.
-              </p>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <div className="relative min-w-[220px] flex-1">
-                  <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <input
-                    id="receipt-search"
-                    value={receiptQuery}
-                    onChange={(e) => setReceiptQuery(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        void lookupSale();
-                      }
-                    }}
-                    placeholder="RCP-…"
-                    className="w-full rounded-xl border border-white/10 bg-white py-3 pl-10 pr-3.5 font-mono text-sm text-gulio-text outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-400/30"
-                    autoFocus
-                  />
+          {!success ? (
+            <div className="rounded-xl border border-gulio-border bg-gulio-card p-5 shadow-sm">
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="min-w-[220px] flex-1">
+                  <label
+                    htmlFor="receipt-search"
+                    className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-gulio-muted"
+                  >
+                    Receipt number
+                  </label>
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gulio-muted" />
+                    <input
+                      id="receipt-search"
+                      value={receiptQuery}
+                      onChange={(e) => setReceiptQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void lookupSale();
+                        }
+                      }}
+                      placeholder="RCP-…"
+                      className={`${inputClass} min-h-touch pl-10 font-mono`}
+                      autoFocus={!sale}
+                    />
+                  </div>
                 </div>
                 <button
                   type="button"
@@ -639,13 +624,18 @@ function ReturnsPageInner() {
                   {lookupLoading ? "Looking up…" : "Lookup"}
                 </button>
               </div>
+              {!sale ? (
+                <p className="mt-3 text-sm text-gulio-muted">
+                  Scan or type the receipt from the original sale to continue.
+                </p>
+              ) : null}
             </div>
-          </div>
+          ) : null}
 
-          {sale ? (
-            <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+          {sale && !success ? (
+            <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
               <div className="space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-gulio-border bg-gulio-card px-5 py-4 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gulio-border bg-gulio-card px-5 py-4 shadow-sm">
                   <div className="flex items-center gap-3">
                     <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
                       <Receipt className="h-5 w-5" />
@@ -662,243 +652,44 @@ function ReturnsPageInner() {
                       </p>
                     </div>
                   </div>
-                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-                    {sale.items.length} line{sale.items.length === 1 ? "" : "s"}
-                  </span>
-                </div>
-
-                <div className="rounded-2xl border border-gulio-border bg-gulio-card p-5 shadow-sm">
-                  <div className="mb-4 flex items-center justify-between gap-2">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-wider text-rose-600">
-                        Step 2 · Items
-                      </p>
-                      <h3 className="mt-0.5 font-semibold text-gulio-text">
-                        Select what comes back
-                      </h3>
-                    </div>
+                  <div className="flex flex-wrap items-center gap-2">
                     {imeiPending ? (
-                      <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
+                      <span className="rounded-md bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
                         IMEI required
                       </span>
                     ) : null}
+                    <span className="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                      {sale.items.length} line
+                      {sale.items.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-gulio-border bg-gulio-card p-5 shadow-sm">
+                  <div className="mb-4">
+                    <h3 className="font-semibold text-gulio-text">
+                      Select what comes back
+                    </h3>
+                    <p className="mt-0.5 text-sm text-gulio-muted">
+                      Tick lines, set disposition, and match IMEI when required.
+                    </p>
                   </div>
                   <div className="space-y-3">
                     {sale.items.map((item) => {
                       const d = drafts[item.saleItemId];
                       if (!d) return null;
-                      const returnable = Math.floor(
-                        Number(item.quantityReturnable),
-                      );
-                      const disabled = returnable <= 0;
-                      const matched = item.tracksSerial
-                        ? matchSoldImei(item, d.imeiScan)
-                        : null;
-                      const imeiTyped = Boolean(normalizeImei(d.imeiScan));
-                      const imeiMismatch = imeiTyped && !matched;
-                      const soldSerials = item.serials.filter(
-                        (s) => s.status === "SOLD",
-                      );
                       return (
-                        <div
+                        <ReturnLineCard
                           key={item.saleItemId}
-                          className={`rounded-2xl border p-4 transition ${
-                            d.selected
-                              ? "border-rose-300 bg-rose-50/40 shadow-sm"
-                              : "border-gulio-border bg-white"
-                          } ${disabled ? "opacity-50" : ""}`}
-                        >
-                          <label className="flex cursor-pointer gap-3">
-                            <input
-                              type="checkbox"
-                              checked={d.selected}
-                              disabled={disabled}
-                              onChange={(e) =>
-                                setDrafts((prev) => ({
-                                  ...prev,
-                                  [item.saleItemId]: {
-                                    ...d,
-                                    selected: e.target.checked,
-                                  },
-                                }))
-                              }
-                              className="mt-1.5 h-4 w-4 accent-rose-600"
-                            />
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-start justify-between gap-2">
-                                <div>
-                                  <p className="font-semibold text-gulio-text">
-                                    {item.productName}
-                                  </p>
-                                  <p className="text-sm text-gulio-muted">
-                                    {item.variantName}
-                                  </p>
-                                </div>
-                                <p className="text-sm font-bold tabular-nums">
-                                  {formatMoney(item.unitPrice)}
-                                </p>
-                              </div>
-                              <p className="mt-1 font-mono text-xs text-gulio-muted">
-                                {item.sku} · returnable {returnable}/
-                                {Math.floor(Number(item.quantitySold))}
-                                {item.tracksSerial ? " · IMEI tracked" : ""}
-                              </p>
-                              {disabled ? (
-                                <p className="mt-2 text-xs font-semibold text-gulio-muted">
-                                  Nothing left to return on this line
-                                </p>
-                              ) : null}
-                            </div>
-                          </label>
-
-                          {d.selected && !disabled ? (
-                            <div className="mt-4 space-y-3 border-t border-rose-200/70 pt-4">
-                              {item.tracksSerial ? (
-                                <div>
-                                  <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-gulio-text">
-                                    <ScanLine className="h-3.5 w-3.5 text-rose-600" />
-                                    Scan returned IMEI — must match sold
-                                  </label>
-                                  <div className="relative">
-                                    <Smartphone className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gulio-muted" />
-                                    <input
-                                      value={d.imeiScan}
-                                      autoComplete="off"
-                                      placeholder="Scan or type IMEI…"
-                                      className={`${inputClass} pl-10 font-mono tracking-wide ${
-                                        matched
-                                          ? "border-emerald-400 focus:border-emerald-500 focus:ring-emerald-500/20"
-                                          : imeiMismatch
-                                            ? "border-red-400 focus:border-red-500 focus:ring-red-500/20"
-                                            : ""
-                                      }`}
-                                      onChange={(e) => {
-                                        const imeiScan = e.target.value;
-                                        const hit = matchSoldImei(item, imeiScan);
-                                        setDrafts((prev) => ({
-                                          ...prev,
-                                          [item.saleItemId]: {
-                                            ...d,
-                                            imeiScan,
-                                            serialUnitId: hit?.serialUnitId ?? null,
-                                            quantity: 1,
-                                          },
-                                        }));
-                                      }}
-                                    />
-                                  </div>
-                                  {matched ? (
-                                    <p className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
-                                      <ShieldCheck className="h-3.5 w-3.5" />
-                                      Matches IMEI sold on this receipt
-                                    </p>
-                                  ) : imeiMismatch ? (
-                                    <p className="mt-2 text-xs font-semibold text-red-700">
-                                      This IMEI was not sold on this line
-                                    </p>
-                                  ) : (
-                                    <p className="mt-2 text-xs text-gulio-muted">
-                                      Physical device in hand must be the serial
-                                      that left the store.
-                                    </p>
-                                  )}
-                                  {soldSerials.length > 0 ? (
-                                    <div className="mt-2 flex flex-wrap gap-1.5">
-                                      {soldSerials.map((s) => {
-                                        const active =
-                                          d.serialUnitId === s.serialUnitId;
-                                        return (
-                                          <button
-                                            key={s.serialUnitId}
-                                            type="button"
-                                            onClick={() =>
-                                              setDrafts((prev) => ({
-                                                ...prev,
-                                                [item.saleItemId]: {
-                                                  ...d,
-                                                  imeiScan: s.serialNumber,
-                                                  serialUnitId: s.serialUnitId,
-                                                  quantity: 1,
-                                                },
-                                              }))
-                                            }
-                                            className={`rounded-lg border px-2 py-1 font-mono text-[11px] font-semibold transition ${
-                                              active
-                                                ? "border-emerald-300 bg-emerald-50 text-emerald-800"
-                                                : "border-gulio-border bg-white text-gulio-muted hover:border-teal-300"
-                                            }`}
-                                          >
-                                            {s.serialNumber}
-                                          </button>
-                                        );
-                                      })}
-                                    </div>
-                                  ) : null}
-                                </div>
-                              ) : (
-                                <div>
-                                  <label className="mb-1.5 block text-xs font-semibold text-gulio-muted">
-                                    Quantity
-                                  </label>
-                                  <input
-                                    inputMode="numeric"
-                                    value={String(d.quantity)}
-                                    onChange={(e) => {
-                                      const n = Number(e.target.value);
-                                      setDrafts((prev) => ({
-                                        ...prev,
-                                        [item.saleItemId]: {
-                                          ...d,
-                                          quantity:
-                                            Number.isFinite(n) && n >= 1
-                                              ? Math.min(
-                                                  Math.floor(n),
-                                                  returnable,
-                                                )
-                                              : d.quantity,
-                                        },
-                                      }));
-                                    }}
-                                    className="w-24 rounded-lg border-2 border-slate-200 px-2 py-1.5 text-center text-sm font-semibold tabular-nums"
-                                  />
-                                </div>
-                              )}
-                              <div>
-                                <p className="mb-1.5 text-xs font-semibold text-gulio-muted">
-                                  Disposition
-                                </p>
-                                <div className="flex flex-wrap gap-1.5">
-                                  {DISPOSITIONS.map((opt) => {
-                                    const on = d.disposition === opt.value;
-                                    return (
-                                      <button
-                                        key={opt.value}
-                                        type="button"
-                                        title={opt.hint}
-                                        onClick={() =>
-                                          setDrafts((prev) => ({
-                                            ...prev,
-                                            [item.saleItemId]: {
-                                              ...d,
-                                              disposition: opt.value,
-                                            },
-                                          }))
-                                        }
-                                        className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
-                                          on
-                                            ? "border-rose-300 bg-white text-rose-800 shadow-sm"
-                                            : "border-gulio-border bg-gulio-bg text-gulio-muted hover:border-slate-300"
-                                        }`}
-                                      >
-                                        {opt.label}
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
+                          item={item}
+                          draft={d}
+                          onChange={(next) =>
+                            setDrafts((prev) => ({
+                              ...prev,
+                              [item.saleItemId]: next,
+                            }))
+                          }
+                        />
                       );
                     })}
                   </div>
@@ -906,13 +697,11 @@ function ReturnsPageInner() {
               </div>
 
               <aside className="space-y-4 lg:sticky lg:top-4">
-                <div className="rounded-2xl border border-gulio-border bg-gulio-card p-5 shadow-sm">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-teal-700">
-                    Step 3 · Refund
+                <div className="rounded-xl border border-gulio-border bg-gulio-card p-5 shadow-sm">
+                  <h3 className="font-semibold text-gulio-text">Confirm refund</h3>
+                  <p className="mt-0.5 text-sm text-gulio-muted">
+                    Reason, method, then process.
                   </p>
-                  <h3 className="mt-0.5 font-semibold text-gulio-text">
-                    Reason & payout
-                  </h3>
 
                   <p className="mb-2 mt-4 text-xs font-semibold text-gulio-muted">
                     Reason
@@ -924,9 +713,8 @@ function ReturnsPageInner() {
                         <button
                           key={r.value}
                           type="button"
-                          title={r.hint}
                           onClick={() => setReasonCode(r.value)}
-                          className={`rounded-xl border px-2.5 py-2 text-left text-xs font-semibold transition ${
+                          className={`min-h-touch rounded-xl border px-2.5 py-2.5 text-left text-xs font-semibold transition ${
                             on
                               ? "border-teal-400 bg-teal-50 text-teal-900"
                               : "border-gulio-border bg-white text-gulio-muted hover:border-slate-300"
@@ -945,7 +733,7 @@ function ReturnsPageInner() {
                     <button
                       type="button"
                       onClick={() => setRefundMethod("CASH")}
-                      className={`rounded-xl border px-2.5 py-2.5 text-left text-xs font-semibold transition ${
+                      className={`min-h-touch rounded-xl border px-2.5 py-2.5 text-left text-xs font-semibold transition ${
                         refundMethod === "CASH"
                           ? "border-teal-400 bg-teal-50 text-teal-900"
                           : "border-gulio-border bg-white text-gulio-muted"
@@ -956,7 +744,7 @@ function ReturnsPageInner() {
                     <button
                       type="button"
                       onClick={() => setRefundMethod("MOBILE_MONEY_MANUAL")}
-                      className={`rounded-xl border px-2.5 py-2.5 text-left text-xs font-semibold transition ${
+                      className={`min-h-touch rounded-xl border px-2.5 py-2.5 text-left text-xs font-semibold transition ${
                         refundMethod === "MOBILE_MONEY_MANUAL"
                           ? "border-teal-400 bg-teal-50 text-teal-900"
                           : "border-gulio-border bg-white text-gulio-muted"
@@ -974,7 +762,7 @@ function ReturnsPageInner() {
                       <select
                         value={warehouseId ?? ""}
                         onChange={(e) => setWarehouseId(e.target.value)}
-                        className={inputClass}
+                        className={`${inputClass} min-h-touch`}
                       >
                         {warehouses.map((w) => (
                           <option key={w.id} value={w.id}>
@@ -989,7 +777,7 @@ function ReturnsPageInner() {
                     <p className="text-xs font-medium text-gulio-muted">
                       Estimated refund
                     </p>
-                    <p className="mt-1 text-cart-total tabular-nums text-gulio-text">
+                    <p className="mt-1 text-3xl font-bold tabular-nums tracking-tight text-gulio-text">
                       {formatMoney(estimatedRefund)}
                     </p>
                     {needsLargePerm ? (
@@ -1059,8 +847,8 @@ function PolicyChip({
   body: string;
 }) {
   return (
-    <div className="flex gap-3 rounded-2xl border border-gulio-border bg-gulio-card p-4 shadow-sm">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-700">
+    <div className="flex gap-3 rounded-xl border border-gulio-border bg-gulio-card p-4 shadow-sm">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
         {icon}
       </span>
       <div>
