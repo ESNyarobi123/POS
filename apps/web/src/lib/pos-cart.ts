@@ -15,7 +15,10 @@ export type PosCartLine = {
   variantName: string;
   sku: string;
   quantity: number;
+  /** Charged unit price for this cart line (may be negotiated). */
   unitPrice: DecimalString;
+  /** Catalog sell price when the line was added — never used as catalog write. */
+  listUnitPrice?: DecimalString;
   requiresSerial: boolean;
   /** Product/variant image URL for cart thumbnails. */
   imageUrl?: string | null;
@@ -38,14 +41,27 @@ export type HeldSale = {
   label: string;
 };
 
-export type PendingPaymentMethod = "cash" | "mobile" | "split";
+export type PendingPaymentMethod = "cash" | "mobile" | "split" | "bank";
+
+export type PendingBankChannel = {
+  id: number;
+  name: string;
+  type: string;
+  currency: string;
+};
+
+export const BANK_CHANNEL_KEY = "gulio_pos_bank_channel";
 
 export function loadCart(): PosCartLine[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = sessionStorage.getItem(CART_STORAGE_KEY);
     if (!raw) return [];
-    return JSON.parse(raw) as PosCartLine[];
+    const parsed = JSON.parse(raw) as PosCartLine[];
+    return parsed.map((line) => ({
+      ...line,
+      listUnitPrice: line.listUnitPrice ?? line.unitPrice,
+    }));
   } catch {
     return [];
   }
@@ -130,8 +146,52 @@ export function setPendingPaymentMethod(method: PendingPaymentMethod): void {
 
 export function getPendingPaymentMethod(): PendingPaymentMethod {
   const m = sessionStorage.getItem(PAYMENT_METHOD_KEY);
-  if (m === "mobile" || m === "split" || m === "cash") return m;
+  if (m === "mobile" || m === "split" || m === "cash" || m === "bank") {
+    return m;
+  }
   return "cash";
+}
+
+export function savePendingBankChannel(channel: PendingBankChannel): void {
+  sessionStorage.setItem(BANK_CHANNEL_KEY, JSON.stringify(channel));
+}
+
+export function loadPendingBankChannel(): PendingBankChannel | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(BANK_CHANNEL_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PendingBankChannel;
+    if (!parsed || !Number.isInteger(parsed.id) || parsed.id <= 0) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function clearPendingBankChannel(): void {
+  sessionStorage.removeItem(BANK_CHANNEL_KEY);
+}
+
+export function paymentMethodForChannel(
+  type: string,
+): "CASH" | "CARD" | "OTHER" {
+  const t = type.trim().toLowerCase();
+  if (t === "cash") return "CASH";
+  if (t === "bank") return "CARD";
+  return "OTHER";
+}
+
+/** POS CASH button → OpticEdge channel type=cash (live name "Cash"). */
+export function pickCashChannel(
+  channels: PendingBankChannel[],
+): PendingBankChannel | null {
+  return (
+    channels.find((c) => c.type.toLowerCase() === "cash") ??
+    channels.find((c) => /^cash$/i.test(c.name.trim())) ??
+    channels.find((c) => /cash/i.test(c.name)) ??
+    null
+  );
 }
 
 export function heldSaleLabel(

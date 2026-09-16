@@ -432,10 +432,10 @@ export default function DashboardPage() {
               </p>
             </div>
             <Link
-              href="/reports"
+              href="/transactions"
               className="text-sm font-medium text-gulio-primary hover:underline"
             >
-              Reports
+              Transactions
             </Link>
           </div>
           {loading && token ? (
@@ -480,6 +480,9 @@ export default function DashboardPage() {
                         : sale.status}
                       {sale.payments?.[0]
                         ? ` · ${sale.payments[0].method === "MOBILE_MONEY_MANUAL" ? "MM" : sale.payments[0].method}`
+                        : ""}
+                      {sale.items.some((i) => i.negotiated)
+                        ? " · Negotiated"
                         : ""}
                     </p>
                   </div>

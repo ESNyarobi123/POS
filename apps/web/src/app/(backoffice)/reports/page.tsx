@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { SaleDto } from "@gulio/contracts";
 import { PageHeader } from "@/components/backoffice/PageHeader";
@@ -8,6 +9,17 @@ import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
 import { formatMoney } from "@/lib/money";
 import { reportKpis } from "@/lib/mock-data";
+import { TransactionLineThumb } from "@/components/backoffice/transactions/TransactionLineThumb";
+import {
+  formatSaleWhen,
+  isNegotiatedSale,
+  itemTitle,
+  negotiatedBelowList,
+  rangeStart,
+  saleChannel,
+  saleDeviceCount,
+  salePaymentSummary,
+} from "@/lib/transaction-display";
 
 const HOUR_BARS = [40, 55, 35, 70, 90, 65, 80, 45, 60, 75, 50, 30];
 const CATEGORY_BARS = [
@@ -32,6 +44,8 @@ function isSameLocalDay(iso: string | null | undefined): boolean {
 export default function ReportsPage() {
   const { ready, token } = useAuth();
   const [loading, setLoading] = useState(true);
+  const [todaySales, setTodaySales] = useState<SaleDto[]>([]);
+  const [recentSales, setRecentSales] = useState<SaleDto[]>([]);
   const [liveKpis, setLiveKpis] = useState<
     Array<{ label: string; value: string; hint: string }> | null
   >(null);
@@ -43,14 +57,24 @@ export default function ReportsPage() {
     void (async () => {
       setLoading(true);
       try {
-        const sales = await apiFetch<SaleDto[]>("/pos/sales?limit=100");
+        const from = rangeStart("7d");
+        const qs = new URLSearchParams({ limit: "200" });
+        if (from) qs.set("from", from.toISOString());
+        const sales = await apiFetch<SaleDto[]>(`/pos/sales?${qs.toString()}`);
         if (cancelled) return;
         const completed = sales.filter((s) => s.status === "COMPLETED");
         const today = completed.filter((s) =>
           isSameLocalDay(s.completedAt ?? s.createdAt),
         );
+        setTodaySales(today);
+        setRecentSales(completed);
         const total = today.reduce((sum, s) => sum + Number(s.grandTotal || 0), 0);
         const avg = today.length ? total / today.length : 0;
+        const negotiatedSales = today.filter((s) => isNegotiatedSale(s));
+        const givenAway = negotiatedSales.reduce(
+          (sum, s) => sum + negotiatedBelowList(s),
+          0,
+        );
         setLiveKpis([
           {
             label: "Today sales",
@@ -68,13 +92,17 @@ export default function ReportsPage() {
             hint: "Incl. tax",
           },
           {
-            label: "Recent window",
-            value: String(completed.length),
-            hint: "Last 100 sales fetched",
+            label: "Negotiated",
+            value: String(negotiatedSales.length),
+            hint: `${formatMoney(givenAway)} below list`,
           },
         ]);
       } catch {
-        if (!cancelled) setLiveKpis(null);
+        if (!cancelled) {
+          setLiveKpis(null);
+          setTodaySales([]);
+          setRecentSales([]);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -96,10 +124,14 @@ export default function ReportsPage() {
     <div>
       <PageHeader
         title="Reports"
-        subtitle={
-          liveKpis
-            ? "Live KPIs from recent sales · charts use illustrative bars"
-            : "Basic KPIs — wire live when sales API is available"
+        subtitle="Today sales with live transaction breakdown · Transaction menu has full filters"
+        actions={
+          <Link
+            href="/transactions"
+            className="inline-flex min-h-10 items-center rounded-xl bg-gulio-primary px-4 text-sm font-semibold text-white hover:bg-gulio-primary-hover"
+          >
+            Open transactions
+          </Link>
         }
       />
 
@@ -121,6 +153,96 @@ export default function ReportsPage() {
           Could not load live sales — showing mock KPIs below the charts.
         </div>
       ) : null}
+
+      <section className="mt-8 rounded-2xl border border-gulio-border bg-white p-5 shadow-sm">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-semibold text-gulio-text">
+              {todaySales.length > 0 ? "Today sales" : "Latest sales"}
+            </h2>
+            <p className="mt-0.5 text-xs text-gulio-muted">
+              {todaySales.length > 0
+                ? "Each sale: cashier, payment, OpticEdge channel, devices, negotiated"
+                : "No completed sales today yet — showing the last 7 days"}
+            </p>
+          </div>
+          <Link
+            href="/transactions"
+            className="text-sm font-medium text-gulio-primary hover:underline"
+          >
+            View all
+          </Link>
+        </div>
+        {loading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="h-16 animate-pulse rounded-xl bg-gulio-bg" />
+            ))}
+          </div>
+        ) : (todaySales.length > 0 ? todaySales : recentSales).length === 0 ? (
+          <p className="rounded-xl bg-gulio-bg/70 px-4 py-8 text-center text-sm text-gulio-muted">
+            No completed sales yet.
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {(todaySales.length > 0 ? todaySales : recentSales)
+              .slice(0, 12)
+              .map((sale) => {
+                const first = sale.items[0];
+                const title = first ? itemTitle(first) : "No lines";
+                const devices = saleDeviceCount(sale);
+                return (
+                  <li
+                    key={sale.id}
+                    className="flex items-start justify-between gap-3 rounded-xl border border-gulio-border px-3.5 py-3"
+                  >
+                    <div className="flex min-w-0 items-start gap-3">
+                      <TransactionLineThumb
+                        imageUrl={first?.imageUrl}
+                        name={title}
+                        size="sm"
+                      />
+                      <div className="min-w-0">
+                        <p className="font-medium text-gulio-text">
+                          {sale.receiptNumber}
+                          <span className="ml-2 text-xs font-normal text-gulio-muted">
+                            {formatSaleWhen(sale.completedAt ?? sale.createdAt)}
+                          </span>
+                        </p>
+                        <p className="mt-0.5 truncate text-xs text-gulio-muted">
+                          {sale.cashierName ?? "Cashier"}
+                          {sale.customerName ? ` · ${sale.customerName}` : ""}
+                          {` · ${title}`}
+                        </p>
+                        <div className="mt-1.5 flex flex-wrap gap-1.5">
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                            {salePaymentSummary(sale)}
+                          </span>
+                          <span className="rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-semibold text-teal-800 ring-1 ring-inset ring-teal-200">
+                            {saleChannel(sale)}
+                          </span>
+                          {isNegotiatedSale(sale) ? (
+                            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-200">
+                              Negotiated
+                            </span>
+                          ) : null}
+                          {devices > 0 ? (
+                            <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-800 ring-1 ring-inset ring-indigo-200">
+                              Device
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                    <p className="shrink-0 text-sm font-bold tabular-nums text-gulio-text">
+                      {formatMoney(sale.grandTotal)}
+                    </p>
+                  </li>
+                );
+              })}
+          </ul>
+        )}
+      </section>
 
       <div className="mt-8 grid gap-6 lg:grid-cols-2">
         <section className="rounded-xl border border-gulio-border bg-gulio-card p-5 shadow-sm">

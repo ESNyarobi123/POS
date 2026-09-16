@@ -105,3 +105,19 @@ export async function apiFetch<T>(
 
   return parsed as T;
 }
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+/** Nest may put `code` on the body or nested under `message`. */
+export function getApiErrorCode(err: unknown): string | null {
+  if (!(err instanceof ApiError)) return null;
+  const body = asRecord(err.body);
+  if (!body) return null;
+  if (typeof body.code === "string") return body.code;
+  const nested = asRecord(body.message);
+  if (nested && typeof nested.code === "string") return nested.code;
+  return null;
+}

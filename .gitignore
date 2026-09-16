@@ -44,3 +44,4 @@ infra/caddy/certs/*
 *.tsbuildinfo
 .vercel
 .cache
+.deploy-chunks/

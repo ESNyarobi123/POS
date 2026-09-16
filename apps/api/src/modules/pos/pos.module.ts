@@ -1,11 +1,12 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { InventoryModule } from "../inventory/inventory.module";
+import { PaymentsModule } from "../payments/payments.module";
 import { PosController } from "./pos.controller";
 import { PosService } from "./pos.service";
 
 @Module({
-  imports: [AuthModule, InventoryModule],
+  imports: [AuthModule, InventoryModule, PaymentsModule],
   controllers: [PosController],
   providers: [PosService],
   exports: [PosService],

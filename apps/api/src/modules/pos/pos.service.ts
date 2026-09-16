@@ -43,6 +43,12 @@ import type {
   SaleDto,
   SaleItemDto,
 } from "@gulio/contracts";
+import {
+  actorIsManager,
+  classifyPriceOverride,
+  parsePriceOverridePolicy,
+} from "./price-override.policy";
+import { PaymentsService } from "../payments/payments.service";
 import { PrismaService } from "../../prisma/prisma.service";
 import type { RequestUser } from "../auth/types/request-user";
 import { InventoryService } from "../inventory/inventory.service";
@@ -55,7 +61,12 @@ type SaleWithRelations = Sale & {
           serialUnit?: { serialNumber: string } | null;
         }
       >;
-      variant?: { sku: string; name: string } | null;
+      variant?: {
+        sku: string;
+        name: string;
+        imageUrl?: string | null;
+        product?: { name: string; imageUrl?: string | null } | null;
+      } | null;
     }
   >;
   payments: Payment[];
@@ -75,6 +86,12 @@ type SaleWithRelations = Sale & {
   branch?: { id: string; name: string; code: string };
   cashier?: { id: string; fullName: string };
   customer?: { id: string; name: string; phone: string | null } | null;
+  opticedgeCashIn?: {
+    channelId: number;
+    channelName: string;
+    channelType: string;
+    status: string;
+  } | null;
 };
 
 const SALE_INCLUDE = {
@@ -83,11 +100,29 @@ const SALE_INCLUDE = {
       serials: {
         include: { serialUnit: { select: { serialNumber: true } } },
       },
-      variant: { select: { sku: true, name: true } },
+      variant: {
+        select: {
+          sku: true,
+          name: true,
+          imageUrl: true,
+          product: { select: { name: true, imageUrl: true } },
+        },
+      },
     },
   },
   payments: true,
   fiscalDocument: true,
+  cashier: { select: { id: true, fullName: true } },
+  customer: { select: { id: true, name: true, phone: true } },
+  branch: { select: { id: true, name: true, code: true } },
+  opticedgeCashIn: {
+    select: {
+      channelId: true,
+      channelName: true,
+      channelType: true,
+      status: true,
+    },
+  },
 } as const;
 
 const RETURNABLE_SALE_INCLUDE = {
@@ -167,11 +202,27 @@ function moneyEquals(a: Prisma.Decimal, b: Prisma.Decimal): boolean {
   return a.equals(b);
 }
 
+function parseIsoDate(value?: string): Date | undefined {
+  const raw = value?.trim();
+  if (!raw) return undefined;
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
+function parsePaymentMethod(value?: string): PaymentMethod | undefined {
+  const raw = value?.trim();
+  if (!raw) return undefined;
+  return Object.values(PaymentMethod).includes(raw as PaymentMethod)
+    ? (raw as PaymentMethod)
+    : undefined;
+}
+
 @Injectable()
 export class PosService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly inventoryService: InventoryService,
+    private readonly paymentsService: PaymentsService,
   ) {}
 
   async openShift(
@@ -347,6 +398,23 @@ export class PosService {
     if (!body.payments?.length) {
       throw new BadRequestException("At least one payment is required");
     }
+    if (body.opticedge) {
+      const channelId = Number(body.opticedge.channelId);
+      if (!Number.isInteger(channelId) || channelId <= 0) {
+        throw new BadRequestException(
+          "opticedge.channelId must be a positive integer",
+        );
+      }
+      const channelName = body.opticedge.channelName?.trim() ?? "";
+      if (!channelName) {
+        throw new BadRequestException("opticedge.channelName is required");
+      }
+      body.opticedge = {
+        channelId,
+        channelName,
+        channelType: (body.opticedge.channelType ?? "").trim().toLowerCase(),
+      };
+    }
 
     const existing = await this.prisma.sale.findUnique({
       where: {
@@ -359,6 +427,26 @@ export class PosService {
     });
     if (existing) {
       return this.mapSale(existing);
+    }
+
+    const org = await this.prisma.organization.findUnique({
+      where: { id: user.organizationId },
+      select: { settings: true },
+    });
+    const policy = parsePriceOverridePolicy(org?.settings);
+    const managerActor = actorIsManager(user.roles);
+
+    let approvedByUserId: string | null = null;
+    const pin = body.managerPin?.trim() ?? "";
+    if (pin) {
+      const approver = await this.verifyManagerPin(user.organizationId, pin);
+      if (!approver) {
+        throw new ForbiddenException({
+          code: "INVALID_MANAGER_PIN",
+          message: "Invalid manager PIN",
+        });
+      }
+      approvedByUserId = approver.id;
     }
 
     const discountTotal = toDecimal(body.discountAmount ?? "0");
@@ -438,13 +526,18 @@ export class PosService {
           variantId: string;
           catalogPrice: string;
           overridePrice: string;
+          reasons: string[];
+          percentBelowList: number;
+          needsManagerPin: boolean;
         }> = [];
+        const pinReasons = new Set<string>();
 
         let subtotal = new Prisma.Decimal(0);
         const preparedLines: Array<{
           variantId: string;
           quantity: Prisma.Decimal;
           unitPrice: Prisma.Decimal;
+          listUnitPrice: Prisma.Decimal;
           lineTotal: Prisma.Decimal;
           tracksSerial: boolean;
           serialUnitIds: string[];
@@ -466,7 +559,21 @@ export class PosService {
             if (unitPrice.lt(0)) {
               throw new BadRequestException("unitPrice must be >= 0");
             }
-            if (!moneyEquals(unitPrice, catalogPrice)) {
+            const decision = classifyPriceOverride({
+              catalogPrice,
+              chargedPrice: unitPrice,
+              costPrice: toDecimal(variant.costPrice ?? 0),
+              policy,
+              actorIsManager: managerActor,
+            });
+            if (decision.status === "forbidden") {
+              throw new BadRequestException(
+                decision.reason === "ABOVE_LIST_DISABLED"
+                  ? "Selling above list price is disabled for this organization"
+                  : "unitPrice must be >= 0",
+              );
+            }
+            if (decision.status === "override") {
               if (
                 !user.permissions.includes(PermissionCode.POS_PRICE_OVERRIDE)
               ) {
@@ -474,10 +581,16 @@ export class PosService {
                   "Missing permission: pos.price_override",
                 );
               }
+              if (decision.needsManagerPin) {
+                for (const reason of decision.reasons) pinReasons.add(reason);
+              }
               priceOverrides.push({
                 variantId: variant.id,
                 catalogPrice: toDecimalString(catalogPrice),
                 overridePrice: toDecimalString(unitPrice),
+                reasons: decision.reasons,
+                percentBelowList: decision.percentBelowList,
+                needsManagerPin: decision.needsManagerPin,
               });
             }
           }
@@ -503,9 +616,20 @@ export class PosService {
             variantId: variant.id,
             quantity,
             unitPrice,
+            listUnitPrice: catalogPrice,
             lineTotal,
             tracksSerial: variant.tracksSerial,
             serialUnitIds,
+          });
+        }
+
+        if (pinReasons.size > 0 && !approvedByUserId) {
+          throw new ForbiddenException({
+            code: "MANAGER_PIN_REQUIRED",
+            message: pinReasons.has("BELOW_COST")
+              ? "Manager PIN required — negotiated price is below cost"
+              : "Manager PIN required for this negotiated price",
+            reasons: [...pinReasons],
           });
         }
 
@@ -597,6 +721,7 @@ export class PosService {
               variantId: line.variantId,
               quantity: line.quantity,
               unitPrice: line.unitPrice,
+              listUnitPrice: line.listUnitPrice,
               discountAmount: new Prisma.Decimal(0),
               taxAmount: new Prisma.Decimal(0),
               lineTotal: line.lineTotal,
@@ -632,6 +757,22 @@ export class PosService {
               provider: pay.provider ?? null,
             },
           });
+          if (
+            pay.provider === "SELCOM" &&
+            pay.method === PaymentMethod.MOBILE_MONEY_MANUAL
+          ) {
+            if (!pay.reference) {
+              throw new BadRequestException(
+                "Selcom payment requires the order reference",
+              );
+            }
+            await this.paymentsService.consumeCompletedIntent(tx, {
+              organizationId: user.organizationId,
+              orderId: pay.reference,
+              amount: pay.amount,
+              saleId: sale.id,
+            });
+          }
         }
 
         for (const item of createdItems) {
@@ -693,8 +834,16 @@ export class PosService {
               discountTotal: toDecimalString(discountTotal),
               itemCount: preparedLines.length,
               note: body.note ?? null,
+              approvedByUserId,
               priceOverrides:
                 priceOverrides.length > 0 ? priceOverrides : undefined,
+              opticedge: body.opticedge
+                ? {
+                    channelId: body.opticedge.channelId,
+                    channelName: body.opticedge.channelName,
+                    channelType: body.opticedge.channelType,
+                  }
+                : undefined,
             },
           },
         });
@@ -705,7 +854,14 @@ export class PosService {
         });
       });
 
-      return this.mapSale(sale);
+      const mapped = this.mapSale(sale);
+      void this.paymentsService
+        .enqueueOpticEdgeCashIn(user, {
+          saleId: mapped.id,
+          channel: body.opticedge,
+        })
+        .catch(() => undefined);
+      return mapped;
     } catch (err) {
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&
@@ -766,11 +922,78 @@ export class PosService {
 
   async listRecentSales(
     user: RequestUser,
-    limit = 20,
+    query: {
+      limit?: number;
+      q?: string;
+      cashierUserId?: string;
+      customerId?: string;
+      paymentMethod?: string;
+      channel?: string;
+      from?: string;
+      to?: string;
+    } = {},
   ): Promise<SaleDto[]> {
-    const take = Math.min(Math.max(limit, 1), 100);
+    const take = Math.min(Math.max(query.limit ?? 20, 1), 200);
+    const q = query.q?.trim();
+    const channel = query.channel?.trim();
+    const from = parseIsoDate(query.from);
+    const to = parseIsoDate(query.to);
+    const method = parsePaymentMethod(query.paymentMethod);
+    const dateRange = {
+      ...(from ? { gte: from } : {}),
+      ...(to ? { lte: to } : {}),
+    };
+    const and: Prisma.SaleWhereInput[] = [];
+    if (from || to) {
+      and.push({
+        OR: [
+          { completedAt: dateRange },
+          { completedAt: null, createdAt: dateRange },
+        ],
+      });
+    }
+    if (channel) {
+      and.push({
+        OR: [
+          {
+            opticedgeCashIn: {
+              channelName: { contains: channel, mode: "insensitive" },
+            },
+          },
+          {
+            payments: {
+              some: {
+                provider: { contains: channel, mode: "insensitive" },
+              },
+            },
+          },
+        ],
+      });
+    }
+    if (q) {
+      and.push({
+        OR: [
+          { receiptNumber: { contains: q, mode: "insensitive" } },
+          { cashier: { fullName: { contains: q, mode: "insensitive" } } },
+          { customer: { name: { contains: q, mode: "insensitive" } } },
+          {
+            items: {
+              some: { variant: { sku: { contains: q, mode: "insensitive" } } },
+            },
+          },
+        ],
+      });
+    }
+
     const sales = await this.prisma.sale.findMany({
-      where: { organizationId: user.organizationId },
+      where: {
+        organizationId: user.organizationId,
+        status: SaleStatus.COMPLETED,
+        ...(query.cashierUserId ? { cashierUserId: query.cashierUserId } : {}),
+        ...(query.customerId ? { customerId: query.customerId } : {}),
+        ...(method ? { payments: { some: { method } } } : {}),
+        ...(and.length ? { AND: and } : {}),
+      },
       orderBy: [{ completedAt: "desc" }, { createdAt: "desc" }],
       take,
       include: SALE_INCLUDE,
@@ -1201,6 +1424,17 @@ export class PosService {
       createdAt: row.createdAt.toISOString(),
       items: (row.items ?? []).map((item) => this.mapSaleItem(item)),
       payments: (row.payments ?? []).map((p) => this.mapPayment(p)),
+      cashierName: row.cashier?.fullName ?? null,
+      customerName: row.customer?.name ?? null,
+      customerPhone: row.customer?.phone ?? null,
+      branchName: row.branch?.name ?? null,
+      channelName:
+        row.opticedgeCashIn?.channelName ??
+        row.payments?.find((p) => p.provider)?.provider ??
+        null,
+      channelType: row.opticedgeCashIn?.channelType ?? null,
+      channelId: row.opticedgeCashIn?.channelId ?? null,
+      cashInStatus: row.opticedgeCashIn?.status ?? null,
     };
   }
 
@@ -1209,7 +1443,12 @@ export class PosService {
       serials?: Array<
         SaleItemSerial & { serialUnit?: { serialNumber: string } | null }
       >;
-      variant?: { sku: string; name: string } | null;
+      variant?: {
+        sku: string;
+        name: string;
+        imageUrl?: string | null;
+        product?: { name: string; imageUrl?: string | null } | null;
+      } | null;
     },
   ): SaleItemDto {
     return {
@@ -1217,6 +1456,19 @@ export class PosService {
       variantId: item.variantId,
       quantity: toDecimalString(item.quantity),
       unitPrice: toDecimalString(item.unitPrice),
+      listUnitPrice: toDecimalString(
+        "listUnitPrice" in item && item.listUnitPrice != null
+          ? item.listUnitPrice
+          : item.unitPrice,
+      ),
+      negotiated: !moneyEquals(
+        toDecimal(item.unitPrice),
+        toDecimal(
+          "listUnitPrice" in item && item.listUnitPrice != null
+            ? item.listUnitPrice
+            : item.unitPrice,
+        ),
+      ),
       discountAmount: toDecimalString(item.discountAmount),
       taxAmount: toDecimalString(item.taxAmount),
       lineTotal: toDecimalString(item.lineTotal),
@@ -1227,6 +1479,8 @@ export class PosService {
       })),
       sku: item.variant?.sku,
       name: item.variant?.name,
+      productName: item.variant?.product?.name,
+      imageUrl: item.variant?.imageUrl ?? item.variant?.product?.imageUrl ?? null,
     };
   }
 

@@ -80,6 +80,81 @@ export type MeResponse = {
   permissions: string[];
 };
 
+export type PriceOverridePolicyDto = {
+  /** Cashier may go this far below list without manager PIN (0–100). */
+  cashierMaxPercentBelowList: number;
+  /** Allow charging more than catalog list price. */
+  allowAboveList: boolean;
+  /** Block (or require manager PIN) when charged price is below cost. */
+  blockBelowCost: boolean;
+};
+
+export const DEFAULT_PRICE_OVERRIDE_POLICY: PriceOverridePolicyDto = {
+  cashierMaxPercentBelowList: 5,
+  allowAboveList: true,
+  blockBelowCost: true,
+};
+
+/** Cashier-safe: no secrets. */
+export type SelcomPublicStatusDto = {
+  enabled: boolean;
+  configured: boolean;
+};
+
+/** Admin settings — secrets are masked, never returned in full. */
+export type SelcomAdminSettingsDto = SelcomPublicStatusDto & {
+  baseUrl: string;
+  merchantId: string;
+  webhookUrl: string;
+  redirectUrl: string;
+  cancelUrl: string;
+  apiKeyMasked: string;
+  apiSecretMasked: string;
+};
+
+export type UpdateSelcomSettingsRequest = {
+  enabled?: boolean;
+  baseUrl?: string;
+  merchantId?: string;
+  webhookUrl?: string;
+  redirectUrl?: string;
+  cancelUrl?: string;
+  /** Omit or empty to keep the stored key. */
+  apiKey?: string;
+  apiSecret?: string;
+};
+
+/** Cashier-safe: no token. */
+export type OpticEdgePublicStatusDto = {
+  enabled: boolean;
+  configured: boolean;
+};
+
+/** Admin settings — token is masked, never returned in full. */
+export type OpticEdgeAdminSettingsDto = OpticEdgePublicStatusDto & {
+  baseUrl: string;
+  apiTokenMasked: string;
+};
+
+export type UpdateOpticEdgeSettingsRequest = {
+  enabled?: boolean;
+  baseUrl?: string;
+  /** Omit or empty to keep the stored token. */
+  apiToken?: string;
+};
+
+export type OrganizationSettingsDto = {
+  priceOverride: PriceOverridePolicyDto;
+  selcom: SelcomAdminSettingsDto;
+  opticedge: OpticEdgeAdminSettingsDto;
+};
+
+export type UpdateOrganizationSettingsRequest = {
+  priceOverride?: Partial<PriceOverridePolicyDto>;
+  selcom?: UpdateSelcomSettingsRequest;
+  opticedge?: UpdateOpticEdgeSettingsRequest;
+};
+
 export type OrganizationContextResponse = {
   organization: {
     id: string;
@@ -107,4 +182,10 @@ export type OrganizationContextResponse = {
     code: string;
     isActive: boolean;
   }>;
+  /** Cashier-safe policy (no secrets / cost figures). */
+  settings: {
+    priceOverride: PriceOverridePolicyDto;
+    selcom: SelcomPublicStatusDto;
+    opticedge: OpticEdgePublicStatusDto;
+  };
 };

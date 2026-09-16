@@ -70,6 +70,13 @@ export type CheckoutPaymentInput = {
   provider?: string;
 };
 
+/** Snapshot of the OpticEdge channel the cashier picked (BANK) or cash till. */
+export type OpticEdgeCheckoutChannel = {
+  channelId: number;
+  channelName: string;
+  channelType: string;
+};
+
 export type CheckoutRequest = {
   registerSessionId: string;
   branchId: string;
@@ -79,6 +86,16 @@ export type CheckoutRequest = {
   note?: string;
   items: CheckoutLineInput[];
   payments: CheckoutPaymentInput[];
+  /**
+   * Owner/Manager PIN — required when a cashier negotiated price exceeds
+   * org policy (below-list cap or below cost).
+   */
+  managerPin?: string;
+  /**
+   * When set, POS records the sale locally then posts cash-in to OpticEdge
+   * on this channel. Cash without a pick uses the OpticEdge cash channel.
+   */
+  opticedge?: OpticEdgeCheckoutChannel;
 };
 
 export type SaleItemSerialDto = {
@@ -90,7 +107,12 @@ export type SaleItemDto = {
   id: string;
   variantId: string;
   quantity: DecimalString;
+  /** Charged unit price for this sale (may be negotiated). */
   unitPrice: DecimalString;
+  /** Catalog sell price frozen at checkout. */
+  listUnitPrice: DecimalString;
+  /** True when charged unit price differs from catalog list. */
+  negotiated: boolean;
   discountAmount: DecimalString;
   taxAmount: DecimalString;
   lineTotal: DecimalString;
@@ -99,6 +121,8 @@ export type SaleItemDto = {
   /** Populated on receipt payloads. */
   sku?: string;
   name?: string;
+  productName?: string;
+  imageUrl?: string | null;
 };
 
 export type PaymentDto = {
@@ -131,6 +155,15 @@ export type SaleDto = {
   createdAt: string;
   items: SaleItemDto[];
   payments: PaymentDto[];
+  cashierName?: string | null;
+  customerName?: string | null;
+  customerPhone?: string | null;
+  branchName?: string | null;
+  channelName?: string | null;
+  channelType?: string | null;
+  channelId?: number | null;
+  /** OpticEdge cash-in status when posted (PENDING | SENT | FAILED). */
+  cashInStatus?: string | null;
 };
 
 export type FiscalDocumentStubDto = {

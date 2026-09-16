@@ -89,9 +89,25 @@ export class PosController {
   @Permissions(PermissionCode.POS_SELL, PermissionCode.REPORTS_VIEW)
   listSales(
     @CurrentUser() user: RequestUser,
-    @Query("limit", new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query("limit", new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @Query("q") q?: string,
+    @Query("cashierUserId") cashierUserId?: string,
+    @Query("customerId") customerId?: string,
+    @Query("paymentMethod") paymentMethod?: string,
+    @Query("channel") channel?: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
   ) {
-    return this.posService.listRecentSales(user, limit);
+    return this.posService.listRecentSales(user, {
+      limit,
+      q,
+      cashierUserId,
+      customerId,
+      paymentMethod,
+      channel,
+      from,
+      to,
+    });
   }
 
   @Get("returns/lookup-sale")

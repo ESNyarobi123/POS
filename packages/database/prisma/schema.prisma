@@ -109,6 +109,22 @@ enum FiscalDocumentStatus {
   NOT_REQUIRED
 }
 
+/// Checkout + wallet-push lifecycle (Selcom). COMPLETED only after webhook or signed status.
+enum SelcomPaymentStatus {
+  PENDING
+  PUSHED
+  COMPLETED
+  FAILED
+  CANCELLED
+  RECONCILE
+}
+
+enum OpticEdgeCashInStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
 /// Per-user permission override on top of role permissions.
 enum UserPermissionEffect {
   GRANT
@@ -152,9 +168,11 @@ model Organization {
   payments          Payment[]
   heldSales         HeldSale[]
   returns           Return[]
-  auditLogs         AuditLog[]
-  outboxEvents      OutboxEvent[]
-  fiscalDocuments   FiscalDocument[]
+  auditLogs             AuditLog[]
+  outboxEvents          OutboxEvent[]
+  fiscalDocuments       FiscalDocument[]
+  selcomPaymentIntents  SelcomPaymentIntent[]
+  opticedgeCashIns      OpticEdgeCashIn[]
 
   @@map("organizations")
 }
@@ -245,9 +263,10 @@ model RegisterSession {
   organization Organization @relation(fields: [organizationId], references: [id])
   register     Register     @relation(fields: [registerId], references: [id])
   branch       Branch       @relation(fields: [branchId], references: [id])
-  openedBy     User         @relation("SessionOpenedBy", fields: [openedByUserId], references: [id])
-  closedBy     User?        @relation("SessionClosedBy", fields: [closedByUserId], references: [id])
-  sales        Sale[]
+  openedBy           User                  @relation("SessionOpenedBy", fields: [openedByUserId], references: [id])
+  closedBy           User?                 @relation("SessionClosedBy", fields: [closedByUserId], references: [id])
+  sales              Sale[]
+  selcomPaymentIntents SelcomPaymentIntent[]
 
   @@index([organizationId])
   @@index([registerId, status])
@@ -279,7 +298,8 @@ model User {
   heldSales            HeldSale[]
   returnsProcessed     Return[]          @relation("ReturnProcessedBy")
   returnsApproved      Return[]          @relation("ReturnApprovedBy")
-  auditLogs            AuditLog[]
+  auditLogs              AuditLog[]
+  selcomPaymentIntents   SelcomPaymentIntent[] @relation("SelcomIntentCashier")
 
   @@unique([organizationId, email])
   @@index([organizationId])
@@ -647,10 +667,12 @@ model Sale {
   registerSession RegisterSession @relation(fields: [registerSessionId], references: [id])
   cashier         User            @relation("SaleCashier", fields: [cashierUserId], references: [id])
   customer        Customer?       @relation(fields: [customerId], references: [id])
-  items           SaleItem[]
-  payments        Payment[]
-  returns         Return[]
-  fiscalDocument  FiscalDocument?
+  items                SaleItem[]
+  payments             Payment[]
+  returns              Return[]
+  fiscalDocument       FiscalDocument?
+  selcomPaymentIntents SelcomPaymentIntent[]
+  opticedgeCashIn      OpticEdgeCashIn?
 
   @@unique([organizationId, receiptNumber])
   @@unique([organizationId, idempotencyKey])
@@ -667,6 +689,8 @@ model SaleItem {
   variantId      String  @map("variant_id") @db.Uuid
   quantity       Decimal @db.Decimal(19, 4)
   unitPrice      Decimal @map("unit_price") @db.Decimal(19, 4)
+  /** Catalog sell price at checkout — never mutated after the sale. */
+  listUnitPrice  Decimal @map("list_unit_price") @db.Decimal(19, 4)
   discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(19, 4)
   taxAmount      Decimal @default(0) @map("tax_amount") @db.Decimal(19, 4)
   lineTotal      Decimal @map("line_total") @db.Decimal(19, 4)
@@ -819,6 +843,67 @@ model OutboxEvent {
   @@index([status, availableAt])
   @@index([organizationId])
   @@map("outbox_events")
+}
+
+/// Selcom Checkout order + wallet push. Collected before POS checkout completes.
+model SelcomPaymentIntent {
+  id                 String              @id @default(uuid()) @db.Uuid
+  organizationId     String              @map("organization_id") @db.Uuid
+  registerSessionId  String              @map("register_session_id") @db.Uuid
+  cashierUserId      String              @map("cashier_user_id") @db.Uuid
+  saleId             String?             @map("sale_id") @db.Uuid
+  orderId            String              @unique @map("order_id")
+  pushTransid        String              @unique @map("push_transid")
+  msisdn             String
+  amount             Decimal             @db.Decimal(19, 4)
+  currency           String              @default("TZS") @db.VarChar(3)
+  status             SelcomPaymentStatus @default(PENDING)
+  providerReference  String?             @map("provider_reference")
+  providerTransid    String?             @map("provider_transid")
+  channel            String?
+  lastMessage        String?             @map("last_message")
+  providerPayload    Json?               @map("provider_payload")
+  completedAt        DateTime?           @map("completed_at") @db.Timestamptz(3)
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization    Organization    @relation(fields: [organizationId], references: [id])
+  registerSession RegisterSession @relation(fields: [registerSessionId], references: [id])
+  cashier         User            @relation("SelcomIntentCashier", fields: [cashierUserId], references: [id])
+  sale            Sale?           @relation(fields: [saleId], references: [id])
+
+  @@index([organizationId, status])
+  @@index([registerSessionId])
+  @@map("selcom_payment_intents")
+}
+
+/// OpticEdge cash-in after a local POS sale. Sale stays complete if the post fails.
+model OpticEdgeCashIn {
+  id             String               @id @default(uuid()) @db.Uuid
+  organizationId String               @map("organization_id") @db.Uuid
+  saleId         String               @unique @map("sale_id") @db.Uuid
+  channelId      Int                  @map("channel_id")
+  channelName    String               @map("channel_name")
+  channelType    String               @map("channel_type")
+  amount         Decimal              @db.Decimal(19, 4)
+  reference      String
+  status         OpticEdgeCashInStatus @default(PENDING)
+  externalId     Int?                 @map("external_id")
+  replayed       Boolean              @default(false)
+  attempts       Int                  @default(0)
+  lastError      String?              @map("last_error")
+  requestJson    Json?                @map("request_json")
+  responseJson   Json?                @map("response_json")
+  sentAt         DateTime?            @map("sent_at") @db.Timestamptz(3)
+  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  sale         Sale         @relation(fields: [saleId], references: [id])
+
+  @@unique([organizationId, reference])
+  @@index([organizationId, status])
+  @@map("opticedge_cash_ins")
 }
 
 /// Fiscal provider stub — sale may be FISCAL_PENDING with idempotent retry.

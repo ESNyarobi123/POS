@@ -37,8 +37,8 @@ type NavItem = {
   exact?: boolean;
   /** Show when user has this permission. */
   permission?: string;
-  /** Show when user has any of these permissions. */
-  anyOf?: string[];
+  /** Show when user has any of these roles (OWNER / MANAGER). */
+  roles?: string[];
 };
 
 const accentMap: Record<
@@ -207,6 +207,15 @@ function IconReturns(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+function IconTransactions(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" {...props}>
+      <rect x="4" y="3" width="16" height="18" rx="2" />
+      <path d="M8 8h8M8 12h8M8 16h5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function IconReports(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" {...props}>
@@ -348,6 +357,14 @@ const navItems: NavItem[] = [
     permission: PermissionCode.REPORTS_VIEW,
   },
   {
+    href: "/transactions",
+    label: "Transaction",
+    accent: "emerald",
+    icon: IconTransactions,
+    permission: PermissionCode.REPORTS_VIEW,
+    roles: ["OWNER", "MANAGER"],
+  },
+  {
     href: "/employees",
     label: "Employees",
     accent: "violet",
@@ -388,7 +405,12 @@ function itemVisible(
   item: NavItem,
   can: (code: string) => boolean,
   canAny: (...codes: string[]) => boolean,
+  roles: string[],
 ): boolean {
+  if (item.roles && item.roles.length > 0) {
+    const upper = roles.map((r) => r.toUpperCase());
+    if (!item.roles.some((r) => upper.includes(r.toUpperCase()))) return false;
+  }
   if (item.permission) return can(item.permission);
   if (item.anyOf && item.anyOf.length > 0) return canAny(...item.anyOf);
   return true;
@@ -396,13 +418,13 @@ function itemVisible(
 
 export function BackOfficeSidebar() {
   const pathname = usePathname();
-  const { can, canAny, isOwner, isManager } = usePermissions();
+  const { can, canAny, isOwner, isManager, roles } = usePermissions();
   const [collapsed, setCollapsed] = useState(false);
   const [hydrated, setHydrated] = useState(false);
 
   const visibleItems = useMemo(
-    () => navItems.filter((item) => itemVisible(item, can, canAny)),
-    [can, canAny],
+    () => navItems.filter((item) => itemVisible(item, can, canAny, roles)),
+    [can, canAny, roles],
   );
 
   const showOpenPos = can(PermissionCode.POS_SELL) || isOwner() || isManager();

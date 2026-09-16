@@ -18,7 +18,13 @@ import {
 import { PermissionCode } from "@gulio/contracts";
 import type { RequestUser } from "../auth/types/request-user";
 import { InventoryService } from "../inventory/inventory.service";
+import { PaymentsService } from "../payments/payments.service";
 import { PosService } from "./pos.service";
+
+const paymentsStub = {
+  consumeCompletedIntent: jest.fn(),
+  enqueueOpticEdgeCashIn: jest.fn().mockResolvedValue(undefined),
+} as unknown as PaymentsService;
 const ORG = "11111111-1111-1111-1111-111111111111";
 const BRANCH = "22222222-2222-2222-2222-222222222222";
 const WAREHOUSE = "33333333-3333-3333-3333-333333333333";
@@ -63,6 +69,8 @@ describe("PosService.checkout", () => {
     warehouse: { findFirst: jest.Mock };
     customer: { findFirst: jest.Mock };
     variant: { findMany: jest.Mock };
+    organization: { findUnique: jest.Mock };
+    user: { findMany: jest.Mock };
     saleItem: { create: jest.Mock };
     saleItemSerial: { createMany: jest.Mock };
     payment: { create: jest.Mock };
@@ -110,6 +118,7 @@ describe("PosService.checkout", () => {
               sku: "USB-C-CABLE",
               name: "USB-C Cable",
               sellPrice: new Prisma.Decimal("15000.0000"),
+              costPrice: new Prisma.Decimal("8000.0000"),
               tracksSerial: false,
               isActive: true,
             },
@@ -119,6 +128,7 @@ describe("PosService.checkout", () => {
               sku: "A07-128-BLK",
               name: "128GB Black",
               sellPrice: new Prisma.Decimal("360000.0000"),
+              costPrice: new Prisma.Decimal("300000.0000"),
               tracksSerial: true,
               isActive: true,
             },
@@ -264,6 +274,10 @@ describe("PosService.checkout", () => {
       warehouse: { findFirst: tx.warehouse.findFirst },
       customer: { findFirst: tx.customer.findFirst },
       variant: { findMany: tx.variant.findMany },
+      organization: {
+        findUnique: jest.fn(async () => ({ settings: {} })),
+      },
+      user: { findMany: jest.fn(async () => []) },
       saleItem: { create: tx.saleItem.create },
       saleItemSerial: { createMany: tx.saleItemSerial.createMany },
       payment: { create: tx.payment.create },
@@ -294,6 +308,7 @@ describe("PosService.checkout", () => {
     service = new PosService(
       prisma as never,
       inventoryService as unknown as InventoryService,
+      paymentsStub,
     );
   });
 
@@ -370,6 +385,120 @@ describe("PosService.checkout", () => {
     expect(second.id).toBe(first.id);
     expect(second.receiptNumber).toBe(first.receiptNumber);
     expect(inventoryService.commitSaleMovement).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows cashier 5% negotiated price without PIN", async () => {
+    const result = await service.checkout(cashierUser(), "idem-nego-5", {
+      registerSessionId: SESSION,
+      branchId: BRANCH,
+      warehouseId: WAREHOUSE,
+      items: [
+        {
+          variantId: CABLE_VARIANT,
+          quantity: 1,
+          unitPrice: "14250.0000",
+        },
+      ],
+      payments: [{ method: PaymentMethod.CASH, amount: "14250.0000" }],
+    });
+
+    expect(result.grandTotal).toBe("14250.0000");
+    expect(result.items[0]?.negotiated).toBe(true);
+    expect(result.items[0]?.listUnitPrice).toBe("15000.0000");
+    expect(result.items[0]?.unitPrice).toBe("14250.0000");
+  });
+
+  it("requires manager PIN when cashier negotiates more than 5% below list", async () => {
+    await expect(
+      service.checkout(cashierUser(), "idem-nego-10", {
+        registerSessionId: SESSION,
+        branchId: BRANCH,
+        warehouseId: WAREHOUSE,
+        items: [
+          { variantId: CABLE_VARIANT, quantity: 1, unitPrice: "9000.0000" },
+        ],
+        payments: [{ method: PaymentMethod.CASH, amount: "9000.0000" }],
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+
+    expect(inventoryService.commitSaleMovement).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid manager PIN on deep negotiation", async () => {
+    prisma.user.findMany.mockResolvedValue([
+      { id: MANAGER_ID, pinHash: await hashPassword("1234") },
+    ]);
+
+    await expect(
+      service.checkout(cashierUser(), "idem-nego-bad-pin", {
+        registerSessionId: SESSION,
+        branchId: BRANCH,
+        warehouseId: WAREHOUSE,
+        managerPin: "0000",
+        items: [
+          { variantId: CABLE_VARIANT, quantity: 1, unitPrice: "9000.0000" },
+        ],
+        payments: [{ method: PaymentMethod.CASH, amount: "9000.0000" }],
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it("completes deep negotiation when manager PIN is valid", async () => {
+    prisma.user.findMany.mockResolvedValue([
+      { id: MANAGER_ID, pinHash: await hashPassword("1234") },
+    ]);
+
+    const result = await service.checkout(cashierUser(), "idem-nego-pin", {
+      registerSessionId: SESSION,
+      branchId: BRANCH,
+      warehouseId: WAREHOUSE,
+      managerPin: "1234",
+      items: [
+        { variantId: CABLE_VARIANT, quantity: 1, unitPrice: "9000.0000" },
+      ],
+      payments: [{ method: PaymentMethod.CASH, amount: "9000.0000" }],
+    });
+
+    expect(result.grandTotal).toBe("9000.0000");
+    expect(result.items[0]?.negotiated).toBe(true);
+    const audit = prisma.auditLog.create.mock.calls.at(-1)?.[0]?.data;
+    expect(audit.afterJson.approvedByUserId).toBe(MANAGER_ID);
+    expect(audit.afterJson.priceOverrides).toHaveLength(1);
+  });
+
+  it("lets a manager override without PIN", async () => {
+    const manager = cashierUser();
+    manager.roles = ["MANAGER"];
+
+    const result = await service.checkout(manager, "idem-nego-mgr", {
+      registerSessionId: SESSION,
+      branchId: BRANCH,
+      warehouseId: WAREHOUSE,
+      items: [
+        { variantId: CABLE_VARIANT, quantity: 1, unitPrice: "9000.0000" },
+      ],
+      payments: [{ method: PaymentMethod.CASH, amount: "9000.0000" }],
+    });
+
+    expect(result.items[0]?.unitPrice).toBe("9000.0000");
+  });
+
+  it("blocks selling above list when org policy disables it", async () => {
+    prisma.organization.findUnique.mockResolvedValue({
+      settings: { priceOverride: { allowAboveList: false } },
+    });
+
+    await expect(
+      service.checkout(cashierUser(), "idem-above", {
+        registerSessionId: SESSION,
+        branchId: BRANCH,
+        warehouseId: WAREHOUSE,
+        items: [
+          { variantId: CABLE_VARIANT, quantity: 1, unitPrice: "20000.0000" },
+        ],
+        payments: [{ method: PaymentMethod.CASH, amount: "20000.0000" }],
+      }),
+    ).rejects.toMatchObject({ message: expect.stringMatching(/above list/i) });
   });
 });
 
@@ -559,6 +688,7 @@ describe("PosService.createReturn", () => {
     service = new PosService(
       prisma as never,
       inventoryService as unknown as InventoryService,
+      paymentsStub,
     );
   });
 
@@ -750,6 +880,7 @@ describe("PosService.openShift", () => {
     const service = new PosService(
       prisma as never,
       { commitSaleMovement: jest.fn() } as never,
+      paymentsStub,
     );
 
     await expect(

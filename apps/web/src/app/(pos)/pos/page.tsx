@@ -32,7 +32,9 @@ import {
 } from "@/components/pos/PosShortcutBar";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
+import { usePermissions } from "@/lib/permissions";
 import { sumLines, type DecimalString } from "@/lib/money";
+import { resolvePriceOverridePolicy } from "@/lib/price-override";
 import {
   clearActiveSale,
   heldSaleLabel,
@@ -46,7 +48,10 @@ import {
   saveDiscountAmount,
   saveHeldSales,
   setPendingPaymentMethod,
+  clearPendingBankChannel,
+  savePendingBankChannel,
   type HeldSale,
+  type PendingBankChannel,
   type PendingPaymentMethod,
   type PosCartCustomer,
   type PosCartLine,
@@ -61,7 +66,7 @@ type SerialPickState = {
   serials: SerialUnitDto[];
 };
 
-type ModalKind = "imei" | "discount" | "customer" | "held" | null;
+type ModalKind = "imei" | "discount" | "customer" | "held" | "negotiate" | null;
 
 function resolveImageUrl(
   product: ProductListItemDto,
@@ -86,7 +91,12 @@ function isPosSearchInput(target: EventTarget | null): boolean {
 
 export default function PosPage() {
   const router = useRouter();
-  const { ready, token, shift, online } = useAuth();
+  const { ready, token, shift, online, orgContext } = useAuth();
+  const { isOwner, isManager } = usePermissions();
+  const actorIsManager = isOwner() || isManager();
+  const policy = resolvePriceOverridePolicy(
+    orgContext?.settings?.priceOverride,
+  );
   const searchRef = useRef<HTMLInputElement>(null);
 
   const [products, setProducts] = useState<ProductListItemDto[]>([]);
@@ -104,6 +114,7 @@ export default function PosPage() {
   const [serialPick, setSerialPick] = useState<SerialPickState | null>(null);
   const [customerOpen, setCustomerOpen] = useState(false);
   const [discountOpen, setDiscountOpen] = useState(false);
+  const [negotiateIndex, setNegotiateIndex] = useState<number | null>(null);
   const [heldOpen, setHeldOpen] = useState(false);
   const [pressedShortcut, setPressedShortcut] = useState<
     ShortcutAction["id"] | null
@@ -228,8 +239,9 @@ export default function PosPage() {
     if (discountOpen) return "discount";
     if (customerOpen) return "customer";
     if (heldOpen) return "held";
+    if (negotiateIndex !== null) return "negotiate";
     return null;
-  }, [serialPick, discountOpen, customerOpen, heldOpen]);
+  }, [serialPick, discountOpen, customerOpen, heldOpen, negotiateIndex]);
 
   const addLine = useCallback((line: PosCartLine) => {
     setCart((prev) => {
@@ -245,6 +257,7 @@ export default function PosPage() {
         ...next[idx],
         quantity: next[idx].quantity + line.quantity,
         imageUrl: next[idx].imageUrl ?? line.imageUrl ?? null,
+        listUnitPrice: next[idx].listUnitPrice ?? line.listUnitPrice,
       };
       return next;
     });
@@ -291,6 +304,7 @@ export default function PosPage() {
       sku: variant.sku,
       quantity: 1,
       unitPrice: variant.sellPrice,
+      listUnitPrice: variant.sellPrice,
       requiresSerial: true,
       imageUrl,
       serialUnitIds: [serial.id],
@@ -312,6 +326,7 @@ export default function PosPage() {
       sku: variant.sku,
       quantity: 1,
       unitPrice: variant.sellPrice,
+      listUnitPrice: variant.sellPrice,
       requiresSerial: false,
       imageUrl,
     });
@@ -356,6 +371,7 @@ export default function PosPage() {
           sku: summary.sku,
           quantity: 1,
           unitPrice: summary.sellPrice,
+          listUnitPrice: summary.sellPrice,
           requiresSerial: false,
           imageUrl: lookupImage,
         });
@@ -376,6 +392,9 @@ export default function PosPage() {
         setError("Cart is empty");
         return;
       }
+      if (method !== "bank") {
+        clearPendingBankChannel();
+      }
       setPendingPaymentMethod(method);
       saveCart(cart);
       saveCustomer(customer);
@@ -383,6 +402,14 @@ export default function PosPage() {
       router.push(`/pos/payment?method=${method}`);
     },
     [cart, customer, discountAmount, router],
+  );
+
+  const goBankPay = useCallback(
+    (channel: PendingBankChannel) => {
+      savePendingBankChannel(channel);
+      goPay("bank");
+    },
+    [goPay],
   );
 
   const openCustomer = useCallback(() => {
@@ -451,8 +478,12 @@ export default function PosPage() {
       setHeldOpen(false);
       return true;
     }
+    if (negotiateIndex !== null) {
+      setNegotiateIndex(null);
+      return true;
+    }
     return false;
-  }, [serialPick, discountOpen, customerOpen, heldOpen]);
+  }, [serialPick, discountOpen, customerOpen, heldOpen, negotiateIndex]);
 
   const focusSearch = useCallback(() => {
     searchRef.current?.focus();
@@ -700,11 +731,27 @@ export default function PosPage() {
           )
         }
         onPay={goPay}
+        onBankPay={goBankPay}
         onOpenCustomer={openCustomer}
         onOpenDiscount={openDiscount}
         onOpenHeld={openHeldList}
         onClearCustomer={() => setCustomer(null)}
         onClearDiscount={() => setDiscountAmount("0")}
+        onNegotiate={(index) => setNegotiateIndex(index)}
+        negotiateLine={
+          negotiateIndex !== null ? (cart[negotiateIndex] ?? null) : null
+        }
+        policy={policy}
+        actorIsManager={actorIsManager}
+        onApplyNegotiate={(unitPrice) => {
+          const idx = negotiateIndex;
+          if (idx === null) return;
+          setCart((prev) =>
+            prev.map((l, i) => (i === idx ? { ...l, unitPrice } : l)),
+          );
+          setNegotiateIndex(null);
+        }}
+        onCloseNegotiate={() => setNegotiateIndex(null)}
       />
 
       {serialPick && (

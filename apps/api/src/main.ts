@@ -35,6 +35,7 @@ async function bootstrap() {
       []),
     "http://localhost:3000",
     "http://localhost:3010",
+    "http://localhost:3015",
   ];
   const allowedOrigins = [...new Set(corsOrigins)];
 

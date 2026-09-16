@@ -118,6 +118,14 @@ function ReceiptInner() {
                 {line.sku && (
                   <p className="text-xs text-gulio-muted">{line.sku}</p>
                 )}
+                {line.negotiated ? (
+                  <p className="text-[11px] font-semibold text-amber-800">
+                    Negotiated · list{" "}
+                    <span className="tabular-nums line-through">
+                      {formatMoney(line.listUnitPrice, organization.currencyCode)}
+                    </span>
+                  </p>
+                ) : null}
                 {line.serials.map((s) =>
                   s.serialNumber ? (
                     <p
@@ -151,6 +159,14 @@ function ReceiptInner() {
               </span>
             </div>
           )}
+          {sale.items.some((i) => i.negotiated) ? (
+            <div className="flex justify-between text-amber-800">
+              <span>Negotiated lines</span>
+              <span className="tabular-nums">
+                {sale.items.filter((i) => i.negotiated).length}
+              </span>
+            </div>
+          ) : null}
           {Number(sale.taxTotal) > 0 && (
             <div className="flex justify-between text-gulio-muted">
               <span>Tax</span>

@@ -1,17 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   formatMoney,
   lineTotal,
   payableAfterDiscount,
   type DecimalString,
 } from "@/lib/money";
+import type { PriceOverridePolicyDto } from "@gulio/contracts";
 import type {
   PendingPaymentMethod,
   PosCartCustomer,
   PosCartLine,
 } from "@/lib/pos-cart";
+import { isNegotiatedPrice } from "@/lib/price-override";
+import { PosBankChannelModal } from "./PosBankChannelModal";
+import { PosNegotiateModal } from "./PosNegotiateModal";
 
 type Props = {
   cart: PosCartLine[];
@@ -24,11 +28,23 @@ type Props = {
   onRemove: (index: number) => void;
   onQtyChange: (index: number, quantity: number) => void;
   onPay: (method: PendingPaymentMethod) => void;
+  onBankPay: (channel: {
+    id: number;
+    name: string;
+    type: string;
+    currency: string;
+  }) => void;
   onOpenCustomer: () => void;
   onOpenDiscount: () => void;
   onOpenHeld: () => void;
   onClearCustomer: () => void;
   onClearDiscount: () => void;
+  onNegotiate: (index: number) => void;
+  negotiateLine: PosCartLine | null;
+  policy: PriceOverridePolicyDto;
+  actorIsManager: boolean;
+  onApplyNegotiate: (unitPrice: DecimalString) => void;
+  onCloseNegotiate: () => void;
 };
 
 function CartEmptyIcon({ className }: { className?: string }) {
@@ -100,18 +116,48 @@ export function PosCartPanel({
   onRemove,
   onQtyChange,
   onPay,
+  onBankPay,
   onOpenCustomer,
   onOpenDiscount,
   onOpenHeld,
   onClearCustomer,
   onClearDiscount,
+  onNegotiate,
+  negotiateLine,
+  policy,
+  actorIsManager,
+  onApplyNegotiate,
+  onCloseNegotiate,
 }: Props) {
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [bankOpen, setBankOpen] = useState(false);
   const itemCount = cart.reduce((n, l) => n + l.quantity, 0);
   const discountN = Number(discountAmount) || 0;
   const payable = payableAfterDiscount(total, discountAmount);
+  const negotiatedCount = cart.filter((l) =>
+    isNegotiatedPrice(l.listUnitPrice, l.unitPrice),
+  ).length;
+
+  const activeIndex =
+    selectedIndex >= 0 && selectedIndex < cart.length
+      ? selectedIndex
+      : Math.max(0, cart.length - 1);
+
+  useEffect(() => {
+    if (cart.length === 0) {
+      setSelectedIndex(0);
+      return;
+    }
+    if (selectedIndex >= cart.length) {
+      setSelectedIndex(cart.length - 1);
+    }
+  }, [cart.length, selectedIndex]);
+
+  const ghostBtn =
+    "min-h-touch rounded-gulio border border-gulio-border bg-transparent text-center text-sm font-semibold text-gulio-muted transition hover:bg-white hover:text-gulio-text active:scale-[0.98] disabled:opacity-50";
 
   return (
-    <aside className="flex w-[360px] shrink-0 flex-col border-l border-gulio-border bg-gulio-card xl:w-[400px]">
+    <aside className="relative flex w-[360px] shrink-0 flex-col border-l border-gulio-border bg-gulio-card xl:w-[400px]">
       <div className="flex items-center justify-between border-b border-gulio-border px-3.5 py-3">
         <div className="flex items-center gap-2">
           <h2 className="text-base font-semibold text-gulio-text">Cart</h2>
@@ -138,7 +184,7 @@ export function PosCartPanel({
         </div>
       </div>
 
-      {(customer || discountN > 0) && (
+      {(customer || discountN > 0 || negotiatedCount > 0) && (
         <div className="flex flex-wrap gap-1.5 border-b border-gulio-border px-3 py-2">
           {customer ? (
             <span className="inline-flex max-w-full items-center gap-0.5 rounded-full bg-teal-50 py-0.5 pl-2.5 pr-1 text-[11px] font-medium text-teal-800 ring-1 ring-inset ring-teal-200">
@@ -178,6 +224,11 @@ export function PosCartPanel({
               </button>
             </span>
           ) : null}
+          {negotiatedCount > 0 ? (
+            <span className="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-200">
+              {negotiatedCount} negotiated
+            </span>
+          ) : null}
         </div>
       )}
 
@@ -197,7 +248,12 @@ export function PosCartPanel({
             {cart.map((line, i) => (
               <li
                 key={`${line.variantId}-${line.serialUnitIds?.[0] ?? i}`}
-                className="rounded-xl border border-gulio-border bg-white p-2 shadow-sm transition hover:border-teal-200/80"
+                className={`rounded-xl border bg-white p-2 shadow-sm transition ${
+                  i === activeIndex
+                    ? "border-gulio-primary ring-2 ring-teal-500/20"
+                    : "border-gulio-border hover:border-teal-200/80"
+                }`}
+                onClick={() => setSelectedIndex(i)}
               >
                 <div className="flex gap-2.5">
                   <CartThumb
@@ -220,6 +276,16 @@ export function PosCartPanel({
                         )}
                       </p>
                     </div>
+                    {isNegotiatedPrice(line.listUnitPrice, line.unitPrice) ? (
+                      <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                        <span className="rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 ring-1 ring-inset ring-amber-200">
+                          Negotiated
+                        </span>
+                        <span className="text-[10px] text-gulio-muted tabular-nums line-through">
+                          {formatMoney(line.listUnitPrice ?? line.unitPrice)}
+                        </span>
+                      </div>
+                    ) : null}
 
                     {line.serialNumbers?.[0] ? (
                       <p className="mt-0.5 truncate font-mono text-[10px] text-amber-700">
@@ -265,6 +331,17 @@ export function PosCartPanel({
                         ) : null}
                         <button
                           type="button"
+                          className="h-7 rounded-lg border border-gulio-border px-2 text-[11px] font-semibold text-gulio-muted transition hover:bg-white hover:text-gulio-text"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedIndex(i);
+                            onNegotiate(i);
+                          }}
+                        >
+                          PRICE
+                        </button>
+                        <button
+                          type="button"
                           className="text-[11px] font-medium text-gulio-error hover:underline"
                           onClick={() => onRemove(i)}
                         >
@@ -304,7 +381,7 @@ export function PosCartPanel({
           </span>
         </div>
 
-        <div className="grid grid-cols-[2fr_1fr_1fr] gap-2">
+        <div className="grid gap-2">
           <button
             type="button"
             onClick={() => onPay("cash")}
@@ -313,27 +390,59 @@ export function PosCartPanel({
           >
             CASH
           </button>
-          <button
-            type="button"
-            onClick={() => onPay("mobile")}
-            disabled={cart.length === 0}
-            className="min-h-touch rounded-gulio border-2 border-gulio-primary bg-white text-center text-sm font-semibold text-gulio-primary transition hover:bg-teal-50 active:scale-[0.98] disabled:opacity-50"
-          >
-            MOBILE
-          </button>
-          <button
-            type="button"
-            onClick={() => onPay("split")}
-            disabled={cart.length === 0}
-            className="min-h-touch rounded-gulio border border-gulio-border bg-transparent text-center text-sm font-semibold text-gulio-muted transition hover:bg-white hover:text-gulio-text active:scale-[0.98] disabled:opacity-50"
-          >
-            SPLIT
-          </button>
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => onPay("mobile")}
+              disabled={cart.length === 0}
+              className="min-h-touch rounded-gulio border-2 border-gulio-primary bg-white text-center text-sm font-semibold text-gulio-primary transition hover:bg-teal-50 active:scale-[0.98] disabled:opacity-50"
+            >
+              MOBILE
+            </button>
+            <button
+              type="button"
+              onClick={() => setBankOpen(true)}
+              disabled={cart.length === 0}
+              className={ghostBtn}
+            >
+              BANK
+            </button>
+            <button
+              type="button"
+              onClick={() => onPay("split")}
+              disabled={cart.length === 0}
+              className={ghostBtn}
+            >
+              SPLIT
+            </button>
+          </div>
         </div>
         <p className="mt-2 text-center text-[11px] text-gulio-muted">
           F9 Payment · {online ? "API connected" : "Browser offline"}
         </p>
       </div>
+
+      {negotiateLine ? (
+        <PosNegotiateModal
+          line={negotiateLine}
+          policy={policy}
+          actorIsManager={actorIsManager}
+          onApply={onApplyNegotiate}
+          onClose={onCloseNegotiate}
+        />
+      ) : null}
+
+      {bankOpen ? (
+        <PosBankChannelModal
+          amount={String(payable) as DecimalString}
+          online={online}
+          onClose={() => setBankOpen(false)}
+          onConfirm={(channel) => {
+            setBankOpen(false);
+            onBankPay(channel);
+          }}
+        />
+      ) : null}
     </aside>
   );
 }

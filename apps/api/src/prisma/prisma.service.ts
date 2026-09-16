@@ -6,7 +6,8 @@ const TENANT_MODELS = [
   "Branch", "Warehouse", "Register", "RegisterSession", "User", "Role",
   "UserPermission", "Brand", "Category", "Product", "Variant", "Barcode",
   "PriceHistory", "SerialUnit", "StockBalance", "StockMovement", "StockCount",
-  "Customer", "Sale", "SaleItem", "Payment", "HeldSale", "Return", "AuditLog"
+  "Customer", "Sale", "SaleItem", "Payment", "HeldSale", "Return", "AuditLog",
+  "FiscalDocument", "OutboxEvent", "SelcomPaymentIntent", "OpticEdgeCashIn",
 ];
 
 /** Nest-injectable Prisma client for API modules. */
