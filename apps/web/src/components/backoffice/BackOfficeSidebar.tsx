@@ -37,6 +37,8 @@ type NavItem = {
   exact?: boolean;
   /** Show when user has this permission. */
   permission?: string;
+  /** Show when user has any of these permissions. */
+  anyOf?: string[];
   /** Show when user has any of these roles (OWNER / MANAGER). */
   roles?: string[];
 };
