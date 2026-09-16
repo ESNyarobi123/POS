@@ -16,6 +16,7 @@ import type {
 import { formatMoney } from "@/lib/money";
 import { ApiError, apiFetch } from "@/lib/api";
 import { CategorySelect } from "./CategorySelect";
+import { BrandSelect } from "./BrandSelect";
 import {
   ProductImageField,
   productImagePreviewSrc,
@@ -62,7 +63,7 @@ function normalizePrice(raw: string): string | null {
 export function ProductCreateModal({ isOpen, onClose, onCreated }: Props) {
   const [step, setStep] = useState<Step>(1);
   const [name, setName] = useState("");
-  const [brand, setBrand] = useState("");
+  const [brandId, setBrandId] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [description, setDescription] = useState("");
   const [variantName, setVariantName] = useState("");
@@ -79,7 +80,7 @@ export function ProductCreateModal({ isOpen, onClose, onCreated }: Props) {
     if (!isOpen) return;
     setStep(1);
     setName("");
-    setBrand("");
+    setBrandId("");
     setCategoryId("");
     setDescription("");
     setVariantName("");
@@ -166,7 +167,7 @@ export function ProductCreateModal({ isOpen, onClose, onCreated }: Props) {
         name: name.trim(),
         description: description.trim() || null,
         imageUrl: imageUrl.trim() || null,
-        ...(brand.trim() ? { brandName: brand.trim() } : {}),
+        ...(brandId ? { brandId } : {}),
         ...(categoryId ? { categoryId } : {}),
         variant: {
           name: variantName.trim(),
@@ -282,12 +283,11 @@ export function ProductCreateModal({ isOpen, onClose, onCreated }: Props) {
                   </Field>
                   <div className="grid gap-3.5 sm:grid-cols-2">
                     <Field label="Brand" htmlFor="create-brand">
-                      <input
+                      <BrandSelect
                         id="create-brand"
-                        value={brand}
-                        onChange={(e) => setBrand(e.target.value)}
-                        placeholder="e.g. Samsung"
-                        className={inputClass}
+                        value={brandId}
+                        onChange={setBrandId}
+                        disabled={saving}
                       />
                     </Field>
                     <Field label="Category" htmlFor="create-category">
@@ -404,7 +404,7 @@ export function ProductCreateModal({ isOpen, onClose, onCreated }: Props) {
                       </p>
                       <p className="truncate text-xs text-gulio-muted">
                         {[
-                          brand.trim() || null,
+                          brandId ? "Brand set" : null,
                           categoryId ? "Category set" : null,
                         ]
                           .filter(Boolean)

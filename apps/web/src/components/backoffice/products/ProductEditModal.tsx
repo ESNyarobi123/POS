@@ -12,6 +12,7 @@ import {
 import type { ProductListItemDto, UpdateProductRequest } from "@gulio/contracts";
 import { formatMoney } from "@/lib/money";
 import { ApiError, apiFetch } from "@/lib/api";
+import { BrandSelect } from "./BrandSelect";
 import { CategorySelect } from "./CategorySelect";
 import {
   ProductImageField,
@@ -43,6 +44,7 @@ export function ProductEditModal({
 }: Props) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [brandId, setBrandId] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [imageUrl, setImageUrl] = useState("");
   const [previewBroken, setPreviewBroken] = useState(false);
@@ -53,6 +55,7 @@ export function ProductEditModal({
     if (!product || !isOpen) return;
     setName(product.name);
     setDescription(product.description ?? "");
+    setBrandId(product.brand?.id ?? "");
     setCategoryId(product.category?.id ?? "");
     setImageUrl(product.imageUrl ?? "");
     setPreviewBroken(false);
@@ -81,12 +84,15 @@ export function ProductEditModal({
     setSaving(true);
     setError(null);
     try {
+      const prevBrandId = product.brand?.id ?? null;
+      const nextBrandId = brandId || null;
       const prevCategoryId = product.category?.id ?? null;
       const nextCategoryId = categoryId || null;
       const body: UpdateProductRequest = {
         name: trimmedName,
         description: description.trim() || null,
         imageUrl: trimmedUrl || null,
+        ...(prevBrandId !== nextBrandId ? { brandId: nextBrandId } : {}),
         ...(prevCategoryId !== nextCategoryId
           ? { categoryId: nextCategoryId }
           : {}),
@@ -181,6 +187,21 @@ export function ProductEditModal({
                         required
                         className={inputClass}
                         autoFocus
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label
+                        htmlFor="edit-product-brand"
+                        className="block text-xs font-semibold uppercase tracking-wide text-gulio-muted"
+                      >
+                        Brand
+                      </label>
+                      <BrandSelect
+                        id="edit-product-brand"
+                        value={brandId}
+                        onChange={setBrandId}
+                        disabled={saving}
                       />
                     </div>
 

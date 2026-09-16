@@ -12,9 +12,11 @@ import {
 } from "@nestjs/common";
 import { PermissionCode } from "@gulio/contracts";
 import type {
+  BrandDto,
   BrandListResponse,
   CategoryDto,
   CategoryListResponse,
+  CreateBrandRequest,
   CreateCategoryRequest,
   CreateProductRequest,
   EnsureVariantBarcodeResponse,
@@ -175,5 +177,17 @@ export class CatalogController {
   @Permissions(...CATALOG_READ)
   listBrands(@CurrentUser() user: RequestUser): Promise<BrandListResponse> {
     return this.catalogService.listBrands(user.organizationId);
+  }
+
+  @Post("brands")
+  @Permissions(PermissionCode.CATALOG_MANAGE)
+  createBrand(
+    @CurrentUser() user: RequestUser,
+    @Body() body: CreateBrandRequest,
+  ): Promise<BrandDto> {
+    return this.catalogService.createBrand(
+      user,
+      body ?? ({} as CreateBrandRequest),
+    );
   }
 }

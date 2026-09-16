@@ -14,6 +14,7 @@ import type {
   BrandListResponse,
   CategoryDto,
   CategoryListResponse,
+  CreateBrandRequest,
   CreateCategoryRequest,
   CreateProductRequest,
   DecimalString,
@@ -469,10 +470,22 @@ export class CatalogService {
       throw new BadRequestException("name cannot be empty");
     }
 
+    const shouldUpdateBrand =
+      body.brandId !== undefined || body.brandName !== undefined;
     const shouldUpdateCategory =
       body.categoryId !== undefined || body.categoryName !== undefined;
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      let brandId: string | null | undefined;
+      if (shouldUpdateBrand) {
+        brandId = await this.resolveBrandId(
+          tx,
+          user.organizationId,
+          body.brandId,
+          body.brandName,
+        );
+      }
+
       let categoryId: string | null | undefined;
       if (shouldUpdateCategory) {
         categoryId = await this.resolveCategoryId(
@@ -493,6 +506,7 @@ export class CatalogService {
           ...(body.imageUrl !== undefined
             ? { imageUrl: body.imageUrl?.trim() || null }
             : {}),
+          ...(shouldUpdateBrand ? { brandId } : {}),
           ...(shouldUpdateCategory ? { categoryId } : {}),
         },
         include: productDetailInclude,
@@ -509,12 +523,14 @@ export class CatalogService {
         name: existing.name,
         description: existing.description,
         imageUrl: existing.imageUrl,
+        brandId: existing.brandId,
         categoryId: existing.categoryId,
       },
       meta: {
         name: updated.name,
         description: updated.description,
         imageUrl: updated.imageUrl,
+        brandId: updated.brandId,
         categoryId: updated.categoryId,
       },
     });
@@ -928,6 +944,50 @@ export class CatalogService {
     };
   }
 
+  async createBrand(
+    user: RequestUser,
+    body: CreateBrandRequest,
+  ): Promise<BrandDto> {
+    const name = body.name?.trim();
+    if (!name) {
+      throw new BadRequestException("name is required");
+    }
+
+    const duplicate = await this.prisma.brand.findFirst({
+      where: {
+        organizationId: user.organizationId,
+        name: { equals: name, mode: "insensitive" },
+      },
+      select: { id: true },
+    });
+    if (duplicate) {
+      throw new ConflictException(`Brand already exists: ${name}`);
+    }
+
+    const created = await this.prisma.brand.create({
+      data: {
+        organizationId: user.organizationId,
+        name,
+      },
+    });
+
+    await this.audit.log({
+      action: "catalog.brand.create",
+      entityType: "Brand",
+      entityId: created.id,
+      userId: user.userId,
+      orgId: user.organizationId,
+      meta: {
+        name: created.name,
+      },
+    });
+
+    return {
+      id: created.id,
+      name: created.name,
+    };
+  }
+
   /**
    * Read-only stock projection for POS hint. Does not mutate ledger.
    * When warehouseId omitted, sums available qty across org warehouses.
@@ -980,8 +1040,8 @@ export class CatalogService {
   private async resolveBrandId(
     tx: Prisma.TransactionClient,
     organizationId: string,
-    brandId?: string,
-    brandName?: string,
+    brandId?: string | null,
+    brandName?: string | null,
   ): Promise<string | null> {
     const id = brandId?.trim();
     if (id) {

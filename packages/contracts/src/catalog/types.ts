@@ -120,6 +120,10 @@ export type CreateCategoryRequest = {
   parentId?: string | null;
 };
 
+export type CreateBrandRequest = {
+  name: string;
+};
+
 export type UpdateCategoryRequest = {
   name?: string;
   parentId?: string | null;
@@ -129,6 +133,10 @@ export type UpdateProductRequest = {
   name?: string;
   description?: string | null;
   imageUrl?: string | null;
+  /** Existing brand id; null clears. Prefer over brandName when both set. */
+  brandId?: string | null;
+  /** Find-or-create by name within org; null clears when brandId omitted. */
+  brandName?: string | null;
   /** Existing category id; null clears. Prefer over categoryName when both set. */
   categoryId?: string | null;
   /** Find-or-create by name within org; null clears when categoryId omitted. */
