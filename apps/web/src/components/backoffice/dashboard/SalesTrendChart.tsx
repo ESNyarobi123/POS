@@ -45,7 +45,9 @@ export function SalesTrendChart({ points, fromLive }: Props) {
         <div>
           <h2 className="font-semibold text-gulio-text">Sales trend</h2>
           <p className="mt-0.5 text-xs text-gulio-muted">
-            {fromLive ? "From completed POS sales" : "Demo trend · live when sales sync"}
+            {fromLive
+              ? "From completed POS sales"
+              : "No sales in this period yet"}
           </p>
         </div>
         <div className="text-right">

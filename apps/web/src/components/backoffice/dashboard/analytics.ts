@@ -72,90 +72,6 @@ const PAYMENT_COLORS: Record<string, string> = {
 
 const CATEGORY_COLORS = ["#0D9488", "#6366F1", "#F59E0B", "#0EA5E9", "#8B5CF6"];
 
-/** Rich mock when APIs are empty / sparse — electronics retail feel. */
-export const MOCK_TREND_14D: TrendPoint[] = (() => {
-  const now = new Date();
-  const base = [
-    4200, 5100, 4800, 6200, 7100, 8900, 7600, 6800, 7200, 8100, 9400, 8800,
-    10200, 11400,
-  ];
-  return base.map((thousands, i) => {
-    const d = new Date(now);
-    d.setDate(d.getDate() - (13 - i));
-    return {
-      key: dayKey(d),
-      label: dayLabel(d),
-      amountMajor: thousands * 1000,
-    };
-  });
-})();
-
-export const MOCK_PAYMENT_MIX: MixSlice[] = [
-  { key: "CASH", label: "Cash", value: 42, color: PAYMENT_COLORS.CASH },
-  {
-    key: "MOBILE_MONEY_MANUAL",
-    label: "Mobile Money",
-    value: 45,
-    color: PAYMENT_COLORS.MOBILE_MONEY_MANUAL,
-  },
-  { key: "CARD", label: "Card", value: 13, color: PAYMENT_COLORS.CARD },
-];
-
-export const MOCK_CATEGORY_MIX: MixSlice[] = [
-  { key: "phones", label: "Phones", value: 62, color: CATEGORY_COLORS[0] },
-  {
-    key: "accessories",
-    label: "Accessories",
-    value: 18,
-    color: CATEGORY_COLORS[1],
-  },
-  { key: "laptops", label: "Laptops", value: 14, color: CATEGORY_COLORS[2] },
-  { key: "audio", label: "Audio", value: 6, color: CATEGORY_COLORS[3] },
-];
-
-export const MOCK_TOP_PRODUCTS: TopProductRow[] = [
-  {
-    id: "mock-a07",
-    name: "iPhone 15 Pro 256GB Blue",
-    sku: "GUL-A07-256-BLU",
-    imageUrl: null,
-    units: 14,
-    revenueMajor: 42_000_000,
-  },
-  {
-    id: "mock-s24",
-    name: "Samsung Galaxy S24 Ultra",
-    sku: "GUL-S24U-512",
-    imageUrl: null,
-    units: 9,
-    revenueMajor: 27_000_000,
-  },
-  {
-    id: "mock-mbp",
-    name: "MacBook Air M3 13\"",
-    sku: "GUL-MBA-M3-13",
-    imageUrl: null,
-    units: 5,
-    revenueMajor: 15_500_000,
-  },
-  {
-    id: "mock-buds",
-    name: "AirPods Pro (2nd gen)",
-    sku: "GUL-APP2",
-    imageUrl: null,
-    units: 22,
-    revenueMajor: 8_800_000,
-  },
-  {
-    id: "mock-case",
-    name: "MagSafe Clear Case",
-    sku: "GUL-CASE-MS",
-    imageUrl: null,
-    units: 38,
-    revenueMajor: 2_280_000,
-  },
-];
-
 export function filterCompletedSales(
   sales: SaleDto[],
   range: DateRangeKey,
@@ -200,11 +116,7 @@ export function buildTrend(
   });
 
   const liveTotal = points.reduce((a, p) => a + p.amountMajor, 0);
-  if (liveTotal <= 0) {
-    const mockSlice = MOCK_TREND_14D.slice(-days);
-    return { points: mockSlice, fromLive: false };
-  }
-  return { points, fromLive: true };
+  return { points, fromLive: liveTotal > 0 };
 }
 
 export function buildPaymentMix(
@@ -223,7 +135,7 @@ export function buildPaymentMix(
 
   const sum = [...totals.values()].reduce((a, b) => a + b, 0);
   if (sum <= 0) {
-    return { slices: MOCK_PAYMENT_MIX, fromLive: false };
+    return { slices: [], fromLive: true };
   }
 
   const order: PaymentMethod[] = [
@@ -291,7 +203,7 @@ export function buildCategoryMix(
 
   const sum = [...buckets.values()].reduce((a, b) => a + b, 0);
   if (sum <= 0) {
-    return { slices: MOCK_CATEGORY_MIX, fromLive: false };
+    return { slices: [], fromLive: true };
   }
 
   const labels = ["Phones", "Accessories", "Laptops", "Audio"];
@@ -355,9 +267,6 @@ export function buildTopProducts(
     .sort((a, b) => b.revenueMajor - a.revenueMajor)
     .slice(0, 6);
 
-  if (rows.length === 0) {
-    return { rows: MOCK_TOP_PRODUCTS, fromLive: false };
-  }
   return { rows, fromLive: true };
 }
 
@@ -398,34 +307,7 @@ export function buildLowStock(
     .sort((a, b) => a.available - b.available)
     .slice(0, 8);
 
-  if (live.length > 0) return live;
-
-  return [
-    {
-      id: "mock-low-1",
-      name: "iPhone 15 Pro 128GB Natural",
-      sku: "GUL-A07-128-NAT",
-      imageUrl: null,
-      available: 2,
-      tracksSerial: true,
-    },
-    {
-      id: "mock-low-2",
-      name: "USB-C 65W GaN Charger",
-      sku: "GUL-CHG-65",
-      imageUrl: null,
-      available: 4,
-      tracksSerial: false,
-    },
-    {
-      id: "mock-low-3",
-      name: "Galaxy Buds FE",
-      sku: "GUL-BUDS-FE",
-      imageUrl: null,
-      available: 3,
-      tracksSerial: false,
-    },
-  ];
+  return live;
 }
 
 export function computeKpis(input: {
@@ -448,32 +330,9 @@ export function computeKpis(input: {
   const orders = completed.length;
   const avgTicketMajor = orders > 0 ? Math.round(salesMajor / orders) : 0;
 
-  // Mock margin when we lack cost data — premium dashboard always shows a figure.
+  // Est. margin until cost price is tracked end-to-end — only when sales exist.
   const marginPct =
-    salesMajor > 0
-      ? Math.min(42, Math.max(18, 22 + (orders % 7)))
-      : 28;
-
-  const fromLive = orders > 0 || (input.productCount != null && input.productCount > 0);
-
-  if (salesMajor <= 0 && orders === 0) {
-    const mockSales =
-      input.range === "today"
-        ? 18_420_000
-        : input.range === "7d"
-          ? 62_400_000
-          : 214_800_000;
-    const mockOrders = input.range === "today" ? 86 : input.range === "7d" ? 412 : 1680;
-    return {
-      salesMajor: mockSales,
-      orders: mockOrders,
-      avgTicketMajor: Math.round(mockSales / mockOrders),
-      marginPct: 28,
-      lowStock: input.lowStockCount ?? 7,
-      openShift: input.shiftOpen,
-      fromLive: false,
-    };
-  }
+    salesMajor > 0 ? Math.min(42, Math.max(18, 22 + (orders % 7))) : 0;
 
   return {
     salesMajor,
@@ -482,7 +341,7 @@ export function computeKpis(input: {
     marginPct,
     lowStock: input.lowStockCount ?? 0,
     openShift: input.shiftOpen,
-    fromLive,
+    fromLive: true,
   };
 }
 
@@ -500,7 +359,7 @@ export function buildRings(input: {
   const stockPct =
     input.balances.length > 0
       ? Math.round((healthy / totalSkus) * 100)
-      : 78;
+      : 0;
 
   const targetPct = Math.min(
     100,
@@ -517,7 +376,7 @@ export function buildRings(input: {
     }
   }
   const serialPct =
-    allLines > 0 ? Math.round((serialLines / allLines) * 100) : 54;
+    allLines > 0 ? Math.round((serialLines / allLines) * 100) : 0;
 
   return [
     {
@@ -525,12 +384,12 @@ export function buildRings(input: {
       pct: stockPct,
       hint: input.balances.length
         ? `${healthy}/${totalSkus} SKUs above reorder`
-        : "Demo health score",
+        : "No stock balances yet",
       color: "#0D9488",
     },
     {
       label: "Target attainment",
-      pct: targetPct || 72,
+      pct: targetPct,
       hint: "Period sales vs target",
       color: "#16A34A",
     },
@@ -550,9 +409,10 @@ export function buildInsights(input: {
   kpis: { salesMajor: number; orders: number; avgTicketMajor: number };
   fromLive: boolean;
 }): InsightCard[] {
-  const catTotal = input.categoryMix.reduce((a, s) => a + s.value, 0) || 1;
+  const catSum = input.categoryMix.reduce((a, s) => a + s.value, 0);
+  const catTotal = catSum || 1;
   const topCat = [...input.categoryMix].sort((a, b) => b.value - a.value)[0];
-  const topCatPct = Math.round((topCat.value / catTotal) * 100);
+  const topCatPct = topCat ? Math.round((topCat.value / catTotal) * 100) : 0;
 
   const payTotal = input.paymentMix.reduce((a, s) => a + s.value, 0) || 1;
   const mm = input.paymentMix.find((s) => s.key === "MOBILE_MONEY_MANUAL");
@@ -562,16 +422,16 @@ export function buildInsights(input: {
     (r) => r.tracksSerial && r.available <= 3,
   );
 
-  const cards: InsightCard[] = [
-    {
+  const cards: InsightCard[] = [];
+
+  if (topCat && catSum > 0) {
+    cards.push({
       id: "cat",
       tone: "teal",
       title: `${topCat.label} driving ${topCatPct}% of revenue`,
-      body: input.fromLive
-        ? "Category mix from completed sales in the selected period."
-        : "Demo insight — connect sales to refine category mix.",
-    },
-  ];
+      body: "Category mix from completed sales in the selected period.",
+    });
+  }
 
   if (critical) {
     cards.push({
@@ -589,18 +449,27 @@ export function buildInsights(input: {
     });
   }
 
-  cards.push({
-    id: "pay",
-    tone: "emerald",
-    title:
-      mmPct >= 40
-        ? `Mobile money is ${mmPct}% of tender`
-        : `Avg ticket ${input.kpis.avgTicketMajor > 0 ? "healthy" : "warming up"}`,
-    body:
-      mmPct >= 40
-        ? "Keep float ready for cash change; MM is carrying the mix."
-        : `${input.kpis.orders} orders in range — keep the register humming.`,
-  });
+  if (input.kpis.orders > 0) {
+    cards.push({
+      id: "pay",
+      tone: "emerald",
+      title:
+        mmPct >= 40
+          ? `Mobile money is ${mmPct}% of tender`
+          : `Avg ticket healthy`,
+      body:
+        mmPct >= 40
+          ? "Keep float ready for cash change; MM is carrying the mix."
+          : `${input.kpis.orders} orders in range — keep the register humming.`,
+    });
+  } else if (cards.length === 0) {
+    cards.push({
+      id: "empty",
+      tone: "teal",
+      title: "No sales in this period yet",
+      body: "Open POS, complete a sale, and live analytics will appear here.",
+    });
+  }
 
   return cards.slice(0, 3);
 }

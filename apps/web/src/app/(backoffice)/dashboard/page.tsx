@@ -158,7 +158,7 @@ export default function DashboardPage() {
           setError(
             e instanceof ApiError
               ? e.message
-              : "Could not load dashboard — showing rich demo analytics",
+              : "Could not load dashboard data",
           );
         }
       } finally {
@@ -265,7 +265,9 @@ export default function DashboardPage() {
           <p className="mt-1 text-sm text-gulio-muted">
             {branchName} · {todayLabel}
             {!online ? " · offline" : ""}
-            {!kpis.fromLive ? " · demo analytics blended in" : ""}
+            {kpis.orders === 0 && products.length === 0
+              ? " · catalog empty — add products to begin"
+              : ""}
           </p>
         </div>
 
@@ -313,7 +315,9 @@ export default function DashboardPage() {
         <StatCard
           label={range === "today" ? "Sales today" : "Sales"}
           value={formatMoney(kpis.salesMajor)}
-          hint={kpis.fromLive ? "Completed checkouts" : "Demo period total"}
+          hint={
+            kpis.orders > 0 ? "Completed checkouts" : "No completed sales yet"
+          }
           accent="teal"
           icon={<IconSales />}
           loading={loading && Boolean(token)}
@@ -447,7 +451,7 @@ export default function DashboardPage() {
             <div className="rounded-lg border border-dashed border-gulio-border bg-gulio-bg/40 px-4 py-8 text-center">
               <p className="text-sm font-medium text-gulio-text">No sales yet</p>
               <p className="mt-1 text-xs text-gulio-muted">
-                Completed checkouts appear here. Demo KPIs still fill the boards above.
+                Completed checkouts appear here. KPIs stay at zero until you sell.
               </p>
               <Link
                 href="/pos"
