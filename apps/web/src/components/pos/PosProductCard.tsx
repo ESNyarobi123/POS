@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { VariantSummaryDto } from "@gulio/contracts";
+import { mediaSrc } from "@/lib/api";
 import { formatMoney } from "@/lib/money";
 
 export type PosProductCardData = {
@@ -52,17 +53,25 @@ function CardMedia({
   tint: string;
 }) {
   const [broken, setBroken] = useState(false);
-  const showImage = Boolean(imageUrl) && !broken;
+  const [loaded, setLoaded] = useState(false);
+  const src = mediaSrc(imageUrl);
+  const showImage = Boolean(src) && !broken;
 
-  if (showImage && imageUrl) {
+  if (showImage && src) {
     return (
       <div className="relative h-28 w-full overflow-hidden rounded-lg bg-gulio-bg sm:h-32">
-        {/* eslint-disable-next-line @next/next/no-img-element -- external seed URLs; avoid next/image domain config */}
+        {!loaded ? (
+          <div className="absolute inset-0 animate-pulse bg-slate-200/80" />
+        ) : null}
+        {/* eslint-disable-next-line @next/next/no-img-element -- catalog images are served by the API webp cache */}
         <img
-          src={imageUrl}
+          src={src}
           alt=""
-          loading="lazy"
-          className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]"
+          decoding="async"
+          className={`h-full w-full object-cover transition duration-300 group-hover:scale-[1.03] ${
+            loaded ? "opacity-100" : "opacity-0"
+          }`}
+          onLoad={() => setLoaded(true)}
           onError={() => setBroken(true)}
         />
       </div>

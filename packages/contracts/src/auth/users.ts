@@ -1,17 +1,23 @@
-/** Assignable employee roles via users.manage APIs (not OWNER create). */
-export type AssignableRoleCode = "CASHIER" | "MANAGER";
+/** Roles an owner can assign when creating or editing employees. */
+export type AssignableRoleCode = "CASHIER" | "MANAGER" | "OWNER";
 
 export type CreateUserRequest = {
   email: string;
   fullName: string;
   password: string;
   roleCode: AssignableRoleCode;
+  /** Optional 4-digit manager PIN for approvals. */
+  pin?: string;
 };
 
 export type UpdateUserRequest = {
   email?: string;
   fullName?: string;
   roleCode?: AssignableRoleCode;
+  /** Omit or empty to keep the current password. */
+  password?: string;
+  /** Omit or empty to keep the current PIN. */
+  pin?: string;
 };
 
 export type OrgUserDto = {
@@ -19,6 +25,7 @@ export type OrgUserDto = {
   email: string;
   fullName: string;
   isActive: boolean;
+  hasPin: boolean;
   roles: string[];
   branchIds: string[];
   createdAt: string;

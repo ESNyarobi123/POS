@@ -34,10 +34,12 @@ export class SelcomService {
     const env = getEnv();
     const api = env.API_URL.replace(/\/$/, "");
     const web = env.WEB_URL.split(",")[0]?.trim().replace(/\/$/, "") || api;
+    const apiLooksLocal = /localhost|127\.0\.0\.1|:4000$/.test(api);
+    const publicApi = apiLooksLocal ? `${web}/api` : api;
     return {
         webhook:
         stored.webhookUrl ||
-        `${api}/payments/selcom/webhooks/checkout`,
+        `${publicApi}/payments/selcom/webhooks/checkout`,
       redirect:
         stored.redirectUrl || `${web}/pos/payment?method=mobile`,
       cancel: stored.cancelUrl || `${web}/pos/payment?method=mobile`,

@@ -26,7 +26,12 @@ async function bootstrap() {
   );
   
   app.useLogger(app.get(Logger));
-  await app.register(helmet as any);
+  await app.register(helmet as any, {
+    // POS/back-office load catalog images from this API origin.
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    // This process serves JSON + images, not HTML documents.
+    contentSecurityPolicy: false,
+  });
 
   // Comma-separated WEB_URL / CORS_ORIGINS — local web often runs on 3000 or 3010
   const corsOrigins = [

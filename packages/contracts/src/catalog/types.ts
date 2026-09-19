@@ -109,6 +109,15 @@ export type BrandListResponse = {
   items: BrandDto[];
 };
 
+/** Upload a product photo (data URL or https). Server stores a compressed copy. */
+export type UploadCatalogImageRequest = {
+  image: string;
+};
+
+export type UploadCatalogImageResponse = {
+  url: string;
+};
+
 export type ListProductsQuery = {
   q?: string;
   categoryId?: string;

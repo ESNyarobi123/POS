@@ -26,6 +26,13 @@ describe("selcom settings", () => {
     expect(JSON.stringify(admin)).not.toContain("super-secret-key");
   });
 
+  it("strips trailing /v1 so checkout paths are not doubled", () => {
+    const stored = parseStoredSelcomSettings({
+      selcom: { baseUrl: "https://apigw.selcommobile.com/v1/" },
+    });
+    expect(stored.baseUrl).toBe("https://apigw.selcommobile.com");
+  });
+
   it("keeps existing secrets when patch fields are empty", () => {
     const merged = mergeSelcomSettings(
       {

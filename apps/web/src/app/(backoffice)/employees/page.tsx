@@ -1,14 +1,13 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import type {
-  AssignableRoleCode,
-  CreateUserRequest,
   OrgUserDto,
   OrgUserListResponse,
   ReplaceUserPermissionsRequest,
   UserPermissionsResponse,
 } from "@gulio/contracts";
+import { Ban, Check, Eye, Pencil, Trash2 } from "lucide-react";
 import {
   AccessDeniedPanel,
   PermissionGate,
@@ -20,6 +19,8 @@ import {
   DataTableCell,
   DataTableRow,
 } from "@/components/backoffice/DataTable";
+import { EmployeeDeleteModal } from "@/components/backoffice/employees/EmployeeDeleteModal";
+import { EmployeeFormModal } from "@/components/backoffice/employees/EmployeeFormModal";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
 import {
@@ -39,22 +40,20 @@ export default function EmployeesPage() {
 }
 
 function EmployeesPageInner() {
-  const { ready, token } = useAuth();
+  const { ready, token, user: me } = useAuth();
   const { isOwner } = usePermissions();
   const [users, setUsers] = useState<OrgUserDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
-  const [showForm, setShowForm] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-
-  const [fullName, setFullName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [roleCode, setRoleCode] = useState<AssignableRoleCode>("CASHIER");
-  const [creating, setCreating] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const [formMode, setFormMode] = useState<"create" | "edit">("create");
+  const [editingUser, setEditingUser] = useState<OrgUserDto | null>(null);
+  const [deleteUser, setDeleteUser] = useState<OrgUserDto | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -91,46 +90,36 @@ function EmployeesPageInner() {
     [users, selectedId],
   );
 
-  async function onCreate(e: FormEvent) {
-    e.preventDefault();
-    setFormError(null);
-    setCreating(true);
-    try {
-      const body: CreateUserRequest = {
-        fullName: fullName.trim(),
-        email: email.trim(),
-        password,
-        roleCode,
-      };
-      const created = await apiFetch<OrgUserDto>("/users", {
-        method: "POST",
-        body,
-      });
-      setUsers((prev) =>
-        [...prev, created].sort((a, b) =>
-          a.fullName.localeCompare(b.fullName),
-        ),
-      );
-      setFullName("");
-      setEmail("");
-      setPassword("");
-      setRoleCode("CASHIER");
-      setShowForm(false);
-      setSelectedId(created.id);
-    } catch (err) {
-      setFormError(
-        err instanceof ApiError
-          ? err.message
-          : err instanceof Error
-            ? err.message
-            : "Could not create user",
-      );
-    } finally {
-      setCreating(false);
-    }
+  const ownerCount = useMemo(
+    () =>
+      users.filter((u) => u.isActive && u.roles.includes("OWNER")).length,
+    [users],
+  );
+
+  function openCreate() {
+    setFormMode("create");
+    setEditingUser(null);
+    setFormOpen(true);
   }
 
-  async function toggleLock(user: OrgUserDto) {
+  function openEdit(user: OrgUserDto) {
+    setFormMode("edit");
+    setEditingUser(user);
+    setFormOpen(true);
+  }
+
+  function onSaved(saved: OrgUserDto) {
+    setUsers((prev) => {
+      const exists = prev.some((u) => u.id === saved.id);
+      const next = exists
+        ? prev.map((u) => (u.id === saved.id ? saved : u))
+        : [...prev, saved];
+      return next.sort((a, b) => a.fullName.localeCompare(b.fullName));
+    });
+    setSelectedId(saved.id);
+  }
+
+  async function toggleDisabled(user: OrgUserDto) {
     setBusyId(user.id);
     setError(null);
     try {
@@ -141,19 +130,54 @@ function EmployeesPageInner() {
       setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
     } catch (err) {
       if (err instanceof ApiError && err.status === 403) {
-        setForbidden(true);
+        setError(err.message);
       } else {
         setError(
           err instanceof ApiError
             ? err.message
             : err instanceof Error
               ? err.message
-              : "Lock action failed",
+              : "Could not update account status",
         );
       }
     } finally {
       setBusyId(null);
     }
+  }
+
+  async function confirmDelete() {
+    if (!deleteUser) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      await apiFetch<OrgUserDto>(`/users/${deleteUser.id}`, {
+        method: "DELETE",
+      });
+      setUsers((prev) => prev.filter((u) => u.id !== deleteUser.id));
+      if (selectedId === deleteUser.id) setSelectedId(null);
+      setDeleteUser(null);
+    } catch (err) {
+      setDeleteError(
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "Could not delete employee",
+      );
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
+  function canManage(user: OrgUserDto): boolean {
+    if (isOwner()) return true;
+    return (
+      !user.roles.includes("OWNER") && !user.roles.includes("MANAGER")
+    );
+  }
+
+  function isLastActiveOwner(user: OrgUserDto): boolean {
+    return user.roles.includes("OWNER") && user.isActive && ownerCount <= 1;
   }
 
   if (forbidden) {
@@ -169,14 +193,14 @@ function EmployeesPageInner() {
     <div className="flex min-h-[calc(100vh-7.5rem)] flex-col">
       <PageHeader
         title="Employees"
-        subtitle="Invite staff, lock accounts, and override permissions"
+        subtitle="View, edit, disable, or delete staff accounts"
         actions={
           <button
             type="button"
-            onClick={() => setShowForm((v) => !v)}
+            onClick={openCreate}
             className="inline-flex min-h-touch items-center rounded-xl bg-gulio-primary px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-gulio-primary-hover"
           >
-            {showForm ? "Close form" : "Add employee"}
+            Add employee
           </button>
         }
       />
@@ -190,76 +214,6 @@ function EmployeesPageInner() {
         </div>
       ) : null}
 
-      {showForm ? (
-        <form
-          onSubmit={onCreate}
-          className="mb-5 rounded-xl border border-gulio-border bg-gulio-card p-5 shadow-sm"
-        >
-          <h2 className="mb-4 text-sm font-semibold text-gulio-text">
-            New employee
-          </h2>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <LabeledInput
-              label="Full name"
-              value={fullName}
-              onChange={setFullName}
-              required
-              autoComplete="name"
-            />
-            <LabeledInput
-              label="Email"
-              type="email"
-              value={email}
-              onChange={setEmail}
-              required
-              autoComplete="off"
-            />
-            <LabeledInput
-              label="Password"
-              type="password"
-              value={password}
-              onChange={setPassword}
-              required
-              autoComplete="new-password"
-            />
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-gulio-text">
-                Role
-              </label>
-              <select
-                value={roleCode}
-                onChange={(e) =>
-                  setRoleCode(e.target.value as AssignableRoleCode)
-                }
-                className="w-full rounded-xl border border-gulio-border bg-white px-3.5 py-2.5 text-sm outline-none ring-gulio-primary focus:ring-2"
-              >
-                <option value="CASHIER">Cashier</option>
-                {isOwner() ? (
-                  <option value="MANAGER">Manager</option>
-                ) : null}
-              </select>
-              {!isOwner() ? (
-                <p className="mt-1 text-xs text-gulio-muted">
-                  Only owners can assign the Manager role.
-                </p>
-              ) : null}
-            </div>
-          </div>
-          {formError ? (
-            <p className="mt-3 text-sm text-gulio-error" role="alert">
-              {formError}
-            </p>
-          ) : null}
-          <button
-            type="submit"
-            disabled={creating}
-            className="mt-4 rounded-xl bg-gulio-primary px-4 py-2.5 text-sm font-semibold text-white hover:bg-gulio-primary-hover disabled:opacity-60"
-          >
-            {creating ? "Creating…" : "Create employee"}
-          </button>
-        </form>
-      ) : null}
-
       <div className="grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(300px,1fr)]">
         <div className="min-w-0">
           {loading ? (
@@ -267,25 +221,22 @@ function EmployeesPageInner() {
           ) : users.length === 0 ? (
             <EmptyState
               title="No employees yet"
-              description="Create a cashier or manager account to get started."
+              description="Create a cashier, manager, or owner account to get started."
             />
           ) : (
             <DataTable
-              columns={["Employee", "Role", "Status", ""]}
+              columns={["Employee", "Role", "Status", "Actions"]}
+              minWidthClassName="min-w-[720px]"
               footer={`${users.length} user${users.length === 1 ? "" : "s"}`}
             >
               {users.map((u) => {
                 const active = u.id === selectedId;
+                const self = me?.id === u.id;
+                const lastOwner = isLastActiveOwner(u);
+                const manage = canManage(u);
+                const busy = busyId === u.id;
                 return (
-                  <DataTableRow
-                    key={u.id}
-                    selected={active}
-                    onClick={() =>
-                      setSelectedId((prev) => (prev === u.id ? null : u.id))
-                    }
-                    role="button"
-                    tabIndex={0}
-                  >
+                  <DataTableRow key={u.id} selected={active}>
                     <DataTableCell>
                       <div className="flex items-center gap-3">
                         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-violet-50 text-xs font-semibold text-violet-700">
@@ -303,28 +254,69 @@ function EmployeesPageInner() {
                     </DataTableCell>
                     <DataTableCell>
                       <span className="text-sm text-gulio-text">
-                        {u.roles.join(", ") || "—"}
+                        {formatRoles(u.roles)}
                       </span>
                     </DataTableCell>
                     <DataTableCell>
                       <StatusBadge active={u.isActive} />
                     </DataTableCell>
                     <DataTableCell className="text-right">
-                      <button
-                        type="button"
-                        disabled={busyId === u.id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void toggleLock(u);
-                        }}
-                        className="rounded-lg border border-gulio-border bg-white px-2.5 py-1.5 text-xs font-semibold text-gulio-text hover:bg-gulio-bg disabled:opacity-60"
-                      >
-                        {busyId === u.id
-                          ? "…"
-                          : u.isActive
-                            ? "Lock"
-                            : "Unlock"}
-                      </button>
+                      <div className="inline-flex items-center justify-end gap-1">
+                        <IconAction
+                          label="View"
+                          active={active}
+                          onClick={() =>
+                            setSelectedId((prev) =>
+                              prev === u.id ? null : u.id,
+                            )
+                          }
+                        >
+                          <Eye className="h-4 w-4" aria-hidden />
+                        </IconAction>
+                        <IconAction
+                          label="Edit"
+                          disabled={!manage || busy}
+                          onClick={() => openEdit(u)}
+                        >
+                          <Pencil className="h-4 w-4" aria-hidden />
+                        </IconAction>
+                        <IconAction
+                          label={
+                            self
+                              ? "You cannot disable your own account"
+                              : lastOwner
+                                ? "Cannot disable the last owner"
+                                : u.isActive
+                                  ? "Disable"
+                                  : "Enable"
+                          }
+                          disabled={!manage || busy || self || lastOwner}
+                          onClick={() => void toggleDisabled(u)}
+                        >
+                          {u.isActive ? (
+                            <Ban className="h-4 w-4" aria-hidden />
+                          ) : (
+                            <Check className="h-4 w-4" aria-hidden />
+                          )}
+                        </IconAction>
+                        <IconAction
+                          label={
+                            self
+                              ? "You cannot delete your own account"
+                              : lastOwner
+                                ? "Cannot delete the last owner"
+                                : "Delete"
+                          }
+                          danger
+                          disabled={!manage || busy || self || lastOwner}
+                          onClick={() => {
+                            setDeleteError(null);
+                            setDeleteUser(u);
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4" aria-hidden />
+                        </IconAction>
+                      </div>
                     </DataTableCell>
                   </DataTableRow>
                 );
@@ -351,6 +343,32 @@ function EmployeesPageInner() {
           )}
         </div>
       </div>
+
+      <EmployeeFormModal
+        isOpen={formOpen}
+        mode={formMode}
+        user={editingUser}
+        allowOwnerRoles={isOwner()}
+        onClose={() => {
+          setFormOpen(false);
+          setEditingUser(null);
+        }}
+        onSaved={onSaved}
+      />
+
+      <EmployeeDeleteModal
+        employeeName={deleteUser?.fullName ?? ""}
+        isOpen={Boolean(deleteUser)}
+        busy={deleteBusy}
+        error={deleteError}
+        onClose={() => {
+          if (!deleteBusy) {
+            setDeleteUser(null);
+            setDeleteError(null);
+          }
+        }}
+        onConfirm={() => void confirmDelete()}
+      />
     </div>
   );
 }
@@ -468,7 +486,7 @@ function PermissionEditor({
           <h2 className="font-semibold text-gulio-text">{user.fullName}</h2>
           <p className="text-sm text-gulio-muted">{user.email}</p>
           <p className="mt-1 text-xs text-gulio-muted">
-            Roles: {user.roles.join(", ") || "—"}
+            Roles: {formatRoles(user.roles)}
           </p>
         </div>
         <StatusBadge active={user.isActive} />
@@ -591,9 +609,56 @@ function StatusBadge({ active }: { active: boolean }) {
           : "bg-rose-50 text-rose-800"
       }`}
     >
-      {active ? "Active" : "Locked"}
+      {active ? "Active" : "Disabled"}
     </span>
   );
+}
+
+function IconAction({
+  label,
+  onClick,
+  disabled,
+  danger,
+  active,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+  active?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+      className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border transition disabled:opacity-40 ${
+        danger
+          ? "border-rose-200 bg-white text-rose-700 hover:bg-rose-50"
+          : active
+            ? "border-teal-600 bg-teal-50 text-teal-800"
+            : "border-gulio-border bg-white text-gulio-text hover:bg-gulio-bg"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function formatRoles(roles: string[]): string {
+  if (roles.length === 0) return "—";
+  return roles
+    .map((code) => {
+      if (code === "CASHIER") return "Cashier";
+      if (code === "MANAGER") return "Manager";
+      if (code === "OWNER") return "Owner";
+      return code;
+    })
+    .join(", ");
 }
 
 function initials(name: string): string {
@@ -603,36 +668,4 @@ function initials(name: string): string {
     .map((p) => p[0] ?? "")
     .join("")
     .toUpperCase();
-}
-
-function LabeledInput({
-  label,
-  value,
-  onChange,
-  type = "text",
-  required,
-  autoComplete,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  type?: string;
-  required?: boolean;
-  autoComplete?: string;
-}) {
-  return (
-    <div>
-      <label className="mb-1.5 block text-sm font-medium text-gulio-text">
-        {label}
-      </label>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        required={required}
-        autoComplete={autoComplete}
-        className="w-full rounded-xl border border-gulio-border px-3.5 py-2.5 text-sm outline-none ring-gulio-primary focus:ring-2"
-      />
-    </div>
-  );
 }

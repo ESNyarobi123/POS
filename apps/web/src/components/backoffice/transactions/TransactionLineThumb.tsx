@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { mediaSrc } from "@/lib/api";
 
 type Size = "sm" | "md";
 
@@ -28,7 +29,8 @@ export function TransactionLineThumb({
     .toUpperCase();
   const box = sizes[size];
 
-  if (!imageUrl || broken) {
+  const src = mediaSrc(imageUrl);
+  if (!src || broken) {
     return (
       <span
         className={`flex shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-teal-50 to-sky-50 font-bold text-teal-700 ring-1 ring-inset ring-gulio-border ${box}`}
@@ -41,7 +43,7 @@ export function TransactionLineThumb({
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={imageUrl}
+      src={src}
       alt=""
       onError={() => setBroken(true)}
       className={`shrink-0 rounded-xl object-cover ring-1 ring-inset ring-gulio-border ${box}`}

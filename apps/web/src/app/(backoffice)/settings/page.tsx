@@ -278,7 +278,7 @@ function SettingsPageInner() {
                 label="API base URL"
                 value={selcomBaseUrl}
                 onChange={setSelcomBaseUrl}
-                placeholder="https://… (from Selcom, not example.com)"
+                placeholder="https://apigw.selcommobile.com (no /v1)"
                 disabled={loading || savingSelcom}
               />
               <FieldControlled

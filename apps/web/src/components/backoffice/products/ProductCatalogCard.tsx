@@ -10,6 +10,7 @@ import {
 import { Eye, Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
 import type { ProductListItemDto } from "@gulio/contracts";
+import { mediaSrc } from "@/lib/api";
 import { formatMoney } from "@/lib/money";
 
 type Props = {
@@ -46,7 +47,9 @@ export function ProductCatalogCard({
   onDelete,
 }: Props) {
   const [broken, setBroken] = useState(false);
-  const imageUrl = product.imageUrl ?? product.variants[0]?.imageUrl ?? null;
+  const imageUrl = mediaSrc(
+    product.imageUrl ?? product.variants[0]?.imageUrl ?? null,
+  );
   const showImage = Boolean(imageUrl) && !broken;
   const tracksImei = product.variants.some((v) => v.requiresSerial);
   const variantCount = product.variants.length;

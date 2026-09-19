@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -73,6 +74,15 @@ export class UsersController {
     return this.usersService.unlock(user, id);
   }
 
+  @Delete(":id")
+  @Permissions(PermissionCode.USERS_MANAGE)
+  remove(
+    @CurrentUser() user: RequestUser,
+    @Param("id", ParseUUIDPipe) id: string,
+  ): Promise<OrgUserDto> {
+    return this.usersService.remove(user, id);
+  }
+
   @Get(":id/permissions")
   @Permissions(PermissionCode.USERS_MANAGE)
   getPermissions(
@@ -90,5 +100,14 @@ export class UsersController {
     @Body() body: ReplaceUserPermissionsRequest,
   ): Promise<UserPermissionsResponse> {
     return this.usersService.replacePermissions(user, id, body);
+  }
+
+  @Get(":id")
+  @Permissions(PermissionCode.USERS_MANAGE)
+  getOne(
+    @CurrentUser() user: RequestUser,
+    @Param("id", ParseUUIDPipe) id: string,
+  ): Promise<OrgUserDto> {
+    return this.usersService.getOne(user, id);
   }
 }

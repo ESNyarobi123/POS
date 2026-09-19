@@ -14,6 +14,7 @@ import type {
   PosCartLine,
 } from "@/lib/pos-cart";
 import { isNegotiatedPrice } from "@/lib/price-override";
+import { mediaSrc } from "@/lib/api";
 import { PosBankChannelModal } from "./PosBankChannelModal";
 import { PosNegotiateModal } from "./PosNegotiateModal";
 
@@ -82,7 +83,8 @@ function CartThumb({
     .join("")
     .toUpperCase();
 
-  if (!imageUrl || broken) {
+  const src = mediaSrc(imageUrl);
+  if (!src || broken) {
     return (
       <span
         className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-teal-50 to-sky-50 text-[11px] font-bold text-teal-700 ring-1 ring-inset ring-gulio-border"
@@ -96,7 +98,7 @@ function CartThumb({
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={imageUrl}
+      src={src}
       alt=""
       loading="lazy"
       onError={() => setBroken(true)}

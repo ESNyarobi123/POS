@@ -284,6 +284,7 @@ model User {
   fullName       String   @map("full_name")
   pinHash        String?  @map("pin_hash")
   isActive       Boolean  @default(true) @map("is_active")
+  deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(3)
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -305,6 +306,7 @@ model User {
 
   @@unique([organizationId, email])
   @@index([organizationId])
+  @@index([organizationId, deletedAt])
   @@map("users")
 }
 

@@ -21,7 +21,16 @@ import { computeEffectivePermissions } from "../auth/effective-permissions";
 import type { RequestUser } from "../auth/types/request-user";
 import { PrismaService } from "../../prisma/prisma.service";
 
-const ASSIGNABLE_ROLES = new Set<AssignableRoleCode>(["CASHIER", "MANAGER"]);
+const ASSIGNABLE_ROLES = new Set<AssignableRoleCode>([
+  "CASHIER",
+  "MANAGER",
+  "OWNER",
+]);
+
+const USER_INCLUDE = {
+  userRoles: { include: { role: true } },
+  userBranches: true,
+} as const;
 
 @Injectable()
 export class UsersService {
@@ -32,15 +41,18 @@ export class UsersService {
 
   async list(actor: RequestUser): Promise<OrgUserListResponse> {
     const users = await this.prisma.user.findMany({
-      where: { organizationId: actor.organizationId },
-      include: {
-        userRoles: { include: { role: true } },
-        userBranches: true,
-      },
+      where: { organizationId: actor.organizationId, deletedAt: null },
+      include: USER_INCLUDE,
       orderBy: [{ fullName: "asc" }, { email: "asc" }],
     });
 
     return { users: users.map((u) => this.toOrgUserDto(u)) };
+  }
+
+  async getOne(actor: RequestUser, userId: string): Promise<OrgUserDto> {
+    const target = await this.findOrgUserOrThrow(actor.organizationId, userId);
+    this.assertCanManageTarget(actor, target.roles);
+    return target;
   }
 
   async create(
@@ -53,6 +65,7 @@ export class UsersService {
     const email = body.email?.trim().toLowerCase();
     const fullName = body.fullName?.trim();
     const password = body.password ?? "";
+    const pin = this.normalizeOptionalPin(body.pin);
 
     if (!email || !fullName || password.length < 8) {
       throw new BadRequestException(
@@ -96,26 +109,24 @@ export class UsersService {
           ).map((b) => b.id);
 
     const passwordHash = await hashPassword(password);
+    const pinHash = pin ? await hashPassword(pin) : null;
 
     const user = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.user.create({
+      return tx.user.create({
         data: {
           organizationId: actor.organizationId,
           email,
           fullName,
           passwordHash,
+          pinHash,
           isActive: true,
           userRoles: { create: { roleId: role.id } },
           userBranches: {
             create: branchIds.map((branchId) => ({ branchId })),
           },
         },
-        include: {
-          userRoles: { include: { role: true } },
-          userBranches: true,
-        },
+        include: USER_INCLUDE,
       });
-      return created;
     });
 
     await this.audit.log({
@@ -145,6 +156,8 @@ export class UsersService {
     const data: {
       email?: string;
       fullName?: string;
+      passwordHash?: string;
+      pinHash?: string;
     } = {};
 
     if (body.fullName !== undefined) {
@@ -176,6 +189,18 @@ export class UsersService {
       data.email = email;
     }
 
+    if (body.password !== undefined && body.password.trim() !== "") {
+      if (body.password.length < 8) {
+        throw new BadRequestException("password must be at least 8 characters");
+      }
+      data.passwordHash = await hashPassword(body.password);
+    }
+
+    const pin = this.normalizeOptionalPin(body.pin);
+    if (pin) {
+      data.pinHash = await hashPassword(pin);
+    }
+
     const nextRoleCode =
       body.roleCode !== undefined
         ? this.normalizeAssignableRole(body.roleCode)
@@ -183,9 +208,12 @@ export class UsersService {
 
     if (nextRoleCode) {
       this.assertCanAssignRole(actor, nextRoleCode);
-      // Assignable roles never include OWNER — demoting an OWNER must keep ≥1 owner.
-      if (target.roles.includes("OWNER")) {
-        await this.assertNotLastOwner(actor.organizationId, userId);
+      if (target.roles.includes("OWNER") && nextRoleCode !== "OWNER") {
+        await this.assertNotLastOwner(
+          actor.organizationId,
+          userId,
+          "demote",
+        );
       }
     }
 
@@ -193,13 +221,10 @@ export class UsersService {
       const user = await tx.user.update({
         where: { id: userId },
         data,
-        include: {
-          userRoles: { include: { role: true } },
-          userBranches: true,
-        },
+        include: USER_INCLUDE,
       });
 
-      if (nextRoleCode) {
+      if (nextRoleCode && !target.roles.includes(nextRoleCode)) {
         const role = await tx.role.findUnique({
           where: {
             organizationId_code: {
@@ -209,7 +234,9 @@ export class UsersService {
           },
         });
         if (!role) {
-          throw new BadRequestException(`Role ${nextRoleCode} is not configured`);
+          throw new BadRequestException(
+            `Role ${nextRoleCode} is not configured`,
+          );
         }
 
         await tx.userRole.deleteMany({ where: { userId } });
@@ -219,10 +246,7 @@ export class UsersService {
 
         return tx.user.findUniqueOrThrow({
           where: { id: userId },
-          include: {
-            userRoles: { include: { role: true } },
-            userBranches: true,
-          },
+          include: USER_INCLUDE,
         });
       }
 
@@ -245,6 +269,8 @@ export class UsersService {
         fullName: updated.fullName,
         roles: updated.userRoles.map((ur) => ur.role.code),
         roleCode: nextRoleCode ?? null,
+        passwordChanged: Boolean(data.passwordHash),
+        pinChanged: Boolean(data.pinHash),
       },
     });
 
@@ -253,11 +279,15 @@ export class UsersService {
 
   async lock(actor: RequestUser, userId: string): Promise<OrgUserDto> {
     if (actor.userId === userId) {
-      throw new ForbiddenException("You cannot lock your own account");
+      throw new ForbiddenException("You cannot disable your own account");
     }
 
     const target = await this.findOrgUserOrThrow(actor.organizationId, userId);
     this.assertCanManageTarget(actor, target.roles);
+
+    if (target.roles.includes("OWNER")) {
+      await this.assertNotLastOwner(actor.organizationId, userId, "disable");
+    }
 
     if (!target.isActive) {
       return target;
@@ -266,10 +296,7 @@ export class UsersService {
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: { isActive: false },
-      include: {
-        userRoles: { include: { role: true } },
-        userBranches: true,
-      },
+      include: USER_INCLUDE,
     });
 
     await this.audit.log({
@@ -296,10 +323,7 @@ export class UsersService {
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: { isActive: true },
-      include: {
-        userRoles: { include: { role: true } },
-        userBranches: true,
-      },
+      include: USER_INCLUDE,
     });
 
     await this.audit.log({
@@ -310,6 +334,47 @@ export class UsersService {
       orgId: actor.organizationId,
       before: { isActive: false },
       meta: { isActive: true, email: updated.email },
+    });
+
+    return this.toOrgUserDto(updated);
+  }
+
+  async remove(actor: RequestUser, userId: string): Promise<OrgUserDto> {
+    if (actor.userId === userId) {
+      throw new ForbiddenException("You cannot delete your own account");
+    }
+
+    const target = await this.findOrgUserOrThrow(actor.organizationId, userId);
+    this.assertCanManageTarget(actor, target.roles);
+
+    if (target.roles.includes("OWNER")) {
+      await this.assertNotLastOwner(actor.organizationId, userId, "delete");
+    }
+
+    const tombstoneEmail = `${userId.replace(/-/g, "")}@deleted.guliosmart.invalid`;
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        isActive: false,
+        deletedAt: new Date(),
+        email: tombstoneEmail,
+      },
+      include: USER_INCLUDE,
+    });
+
+    await this.audit.log({
+      action: "user.delete",
+      entityType: "User",
+      entityId: userId,
+      userId: actor.userId,
+      orgId: actor.organizationId,
+      before: {
+        email: target.email,
+        fullName: target.fullName,
+        roles: target.roles,
+        isActive: target.isActive,
+      },
+      meta: { deleted: true },
     });
 
     return this.toOrgUserDto(updated);
@@ -426,9 +491,21 @@ export class UsersService {
   private normalizeAssignableRole(roleCode: string): AssignableRoleCode {
     const code = roleCode?.trim().toUpperCase() as AssignableRoleCode;
     if (!ASSIGNABLE_ROLES.has(code)) {
-      throw new BadRequestException("roleCode must be CASHIER or MANAGER");
+      throw new BadRequestException(
+        "roleCode must be CASHIER, MANAGER, or OWNER",
+      );
     }
     return code;
+  }
+
+  private normalizeOptionalPin(raw?: string): string | undefined {
+    if (raw === undefined) return undefined;
+    const pin = raw.trim();
+    if (!pin) return undefined;
+    if (!/^\d{4}$/.test(pin)) {
+      throw new BadRequestException("PIN must be exactly 4 digits");
+    }
+    return pin;
   }
 
   private normalizePermissionCodes(codes: string[]): string[] {
@@ -445,15 +522,15 @@ export class UsersService {
     actor: RequestUser,
     roleCode: AssignableRoleCode,
   ): void {
-    const isOwner = actor.roles.includes("OWNER");
-    if (roleCode === "MANAGER" && !isOwner) {
-      throw new ForbiddenException("Only OWNER can create or assign MANAGER");
-    }
     if (roleCode === "CASHIER") {
       return;
     }
-    if (roleCode === "MANAGER" && isOwner) {
-      return;
+    if (!actor.roles.includes("OWNER")) {
+      throw new ForbiddenException(
+        roleCode === "OWNER"
+          ? "Only OWNER can create or assign OWNER"
+          : "Only OWNER can create or assign MANAGER",
+      );
     }
   }
 
@@ -465,7 +542,6 @@ export class UsersService {
     if (isOwner) {
       return;
     }
-    // Managers with users.manage may only manage cashiers.
     if (targetRoles.includes("OWNER") || targetRoles.includes("MANAGER")) {
       throw new ForbiddenException(
         "Managers can only manage cashier accounts",
@@ -476,17 +552,24 @@ export class UsersService {
   private async assertNotLastOwner(
     organizationId: string,
     userId: string,
+    action: "demote" | "disable" | "delete",
   ): Promise<void> {
     const owners = await this.prisma.userRole.findMany({
       where: {
         role: { organizationId, code: "OWNER" },
-        user: { organizationId, isActive: true },
+        user: { organizationId, isActive: true, deletedAt: null },
       },
       select: { userId: true },
     });
     const ownerIds = new Set(owners.map((o) => o.userId));
     if (ownerIds.size <= 1 && ownerIds.has(userId)) {
-      throw new ForbiddenException("Cannot demote the last OWNER");
+      const verb =
+        action === "demote"
+          ? "demote"
+          : action === "disable"
+            ? "disable"
+            : "delete";
+      throw new ForbiddenException(`Cannot ${verb} the last OWNER`);
     }
   }
 
@@ -495,11 +578,8 @@ export class UsersService {
     userId: string,
   ): Promise<OrgUserDto> {
     const user = await this.prisma.user.findFirst({
-      where: { id: userId, organizationId },
-      include: {
-        userRoles: { include: { role: true } },
-        userBranches: true,
-      },
+      where: { id: userId, organizationId, deletedAt: null },
+      include: USER_INCLUDE,
     });
     if (!user) {
       throw new NotFoundException("User not found");
@@ -512,6 +592,7 @@ export class UsersService {
     email: string;
     fullName: string;
     isActive: boolean;
+    pinHash?: string | null;
     createdAt: Date;
     updatedAt: Date;
     userRoles: Array<{ role: { code: string } }>;
@@ -522,6 +603,7 @@ export class UsersService {
       email: user.email,
       fullName: user.fullName,
       isActive: user.isActive,
+      hasPin: Boolean(user.pinHash),
       roles: user.userRoles.map((ur) => ur.role.code),
       branchIds: user.userBranches.map((ub) => ub.branchId),
       createdAt: user.createdAt.toISOString(),

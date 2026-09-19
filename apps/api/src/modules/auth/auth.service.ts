@@ -58,7 +58,7 @@ export class AuthService {
     }
 
     const user = await this.prisma.user.findFirst({
-      where: { email: normalized },
+      where: { email: normalized, deletedAt: null },
       include: userAuthInclude,
     });
 
@@ -73,7 +73,7 @@ export class AuthService {
 
     if (!user.isActive) {
       throw new UnauthorizedException(
-        "Account is locked. Contact your owner or manager.",
+        "Account is disabled. Contact your owner or manager.",
       );
     }
 
@@ -115,7 +115,7 @@ export class AuthService {
       },
     });
 
-    if (!user || !user.isActive) {
+    if (!user || !user.isActive || user.deletedAt) {
       throw new NotFoundException("User not found");
     }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { mediaSrc } from "@/lib/api";
 
 type Props = {
   imageUrl: string | null;
@@ -16,14 +17,15 @@ function initials(name: string): string {
 
 export function ProductThumb({ imageUrl, name }: Props) {
   const [broken, setBroken] = useState(false);
-  const showImage = Boolean(imageUrl) && !broken;
+  const src = mediaSrc(imageUrl);
+  const showImage = Boolean(src) && !broken;
 
   return (
     <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-gulio-bg text-[11px] font-semibold text-gulio-muted ring-1 ring-gulio-border">
-      {showImage && imageUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element -- external seed URLs
+      {showImage && src ? (
+        // eslint-disable-next-line @next/next/no-img-element -- catalog images are served by the API
         <img
-          src={imageUrl}
+          src={src}
           alt=""
           loading="lazy"
           className="h-full w-full object-cover"

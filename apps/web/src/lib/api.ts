@@ -6,6 +6,16 @@ export const API_BASE_URL =
 
 export const TOKEN_STORAGE_KEY = "gulio_access_token";
 
+/** Catalog list DTOs use `/catalog/...` paths; prefix the API origin for <img>. */
+export function mediaSrc(url: string | null | undefined): string | null {
+  const trimmed = (url ?? "").trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("/catalog/")) {
+    return `${API_BASE_URL}${trimmed}`;
+  }
+  return trimmed;
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly body: unknown;

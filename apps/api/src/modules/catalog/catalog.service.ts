@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import {
@@ -32,6 +33,12 @@ import { Prisma } from "@gulio/database";
 import { AuditService } from "../audit/audit.service";
 import type { RequestUser } from "../auth/types/request-user";
 import { PrismaService } from "../../prisma/prisma.service";
+import {
+  isManagedCatalogImageUrl,
+  mediaIdFromUrl,
+  toClientImageUrl,
+} from "./catalog-image";
+import { MediaService, type PreparedImage } from "./media.service";
 
 const DEFAULT_PRODUCT_LIMIT = 50;
 const MAX_PRODUCT_LIMIT = 100;
@@ -100,15 +107,9 @@ function primaryBarcode(barcodes: BarcodeRow[]): string | null {
   return primary?.value ?? null;
 }
 
-function resolveImageUrl(
-  variantImageUrl: string | null | undefined,
-  productImageUrl: string | null | undefined,
-): string | null {
-  return variantImageUrl ?? productImageUrl ?? null;
-}
-
 function mapVariantSummary(
   row: VariantWithBarcodes,
+  productId: string,
   productImageUrl: string | null,
 ): VariantSummaryDto {
   return {
@@ -120,7 +121,12 @@ function mapVariantSummary(
     requiresSerial: row.tracksSerial,
     isActive: row.isActive,
     primaryBarcode: primaryBarcode(row.barcodes),
-    imageUrl: resolveImageUrl(row.imageUrl, productImageUrl),
+    imageUrl: toClientImageUrl({
+      productId,
+      productImageUrl,
+      variantId: row.id,
+      variantImageUrl: row.imageUrl,
+    }),
   };
 }
 
@@ -129,11 +135,16 @@ function mapProductListItem(row: ProductWithRelations): ProductListItemDto {
     id: row.id,
     name: row.name,
     description: row.description,
-    imageUrl: row.imageUrl,
+    imageUrl: toClientImageUrl({
+      productId: row.id,
+      productImageUrl: row.imageUrl,
+    }),
     isActive: row.isActive,
     brand: mapBrand(row.brand),
     category: mapCategory(row.category),
-    variants: row.variants.map((v) => mapVariantSummary(v, row.imageUrl)),
+    variants: row.variants.map((v) =>
+      mapVariantSummary(v, row.id, row.imageUrl),
+    ),
   };
 }
 
@@ -170,7 +181,10 @@ function mapVariantDetail(
       id: product.id,
       name: product.name,
       description: product.description,
-      imageUrl: product.imageUrl,
+      imageUrl: toClientImageUrl({
+        productId: product.id,
+        productImageUrl: product.imageUrl,
+      }),
       isActive: product.isActive,
       brand: mapBrand(product.brand),
       category: mapCategory(product.category),
@@ -206,9 +220,12 @@ const productDetailInclude = {
 
 @Injectable()
 export class CatalogService {
+  private readonly log = new Logger(CatalogService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly media: MediaService,
   ) {}
 
   async listProducts(
@@ -270,7 +287,9 @@ export class CatalogService {
       take: limit,
     });
 
-    return { items: rows.map(mapProductListItem) };
+    const items = rows.map(mapProductListItem);
+    this.primeImageCache(rows);
+    return { items };
   }
 
   async getProductById(
@@ -285,6 +304,72 @@ export class CatalogService {
       throw new NotFoundException("Product not found");
     }
     return mapProductListItem(row);
+  }
+
+  async streamProductImage(productId: string): Promise<PreparedImage> {
+    const row = await this.prisma.product.findFirst({
+      where: { id: productId },
+      select: { imageUrl: true },
+    });
+    if (!row?.imageUrl) {
+      throw new NotFoundException("Image not found");
+    }
+    return this.streamStoredImage("product", productId, row.imageUrl);
+  }
+
+  async streamVariantImage(variantId: string): Promise<PreparedImage> {
+    const row = await this.prisma.variant.findFirst({
+      where: { id: variantId },
+      select: {
+        imageUrl: true,
+        product: { select: { id: true, imageUrl: true } },
+      },
+    });
+    const raw = row?.imageUrl || row?.product.imageUrl;
+    if (!row || !raw) {
+      throw new NotFoundException("Image not found");
+    }
+    return this.streamStoredImage("variant", variantId, raw);
+  }
+
+  private primeImageCache(rows: ProductWithRelations[]): void {
+    for (const row of rows) {
+      if (!row.imageUrl) continue;
+      void this.streamStoredImage("product", row.id, row.imageUrl).catch(
+        () => undefined,
+      );
+    }
+  }
+
+  private async streamStoredImage(
+    kind: "product" | "variant",
+    id: string,
+    raw: string,
+  ): Promise<PreparedImage> {
+    if (isManagedCatalogImageUrl(raw)) {
+      throw new NotFoundException("Image not found");
+    }
+    const mediaId = mediaIdFromUrl(raw);
+    if (mediaId) {
+      const cached = await this.media.getCached(`media/${mediaId}.webp`);
+      if (!cached) {
+        throw new NotFoundException("Image not found");
+      }
+      return { buffer: cached, contentType: "image/webp" };
+    }
+    try {
+      return await this.media.prepareFromRaw(
+        raw,
+        this.media.cacheKeyFor(kind, id, raw),
+      );
+    } catch (err) {
+      this.log.warn(
+        `Catalog image ${kind}/${id}: ${
+          err instanceof Error ? err.message : "unavailable"
+        }`,
+      );
+      throw new NotFoundException("Image not found");
+    }
   }
 
   async createProduct(
@@ -504,7 +589,15 @@ export class CatalogService {
             ? { description: body.description?.trim() || null }
             : {}),
           ...(body.imageUrl !== undefined
-            ? { imageUrl: body.imageUrl?.trim() || null }
+            ? {
+                imageUrl: (() => {
+                  const trimmed = body.imageUrl?.trim() || null;
+                  if (trimmed && isManagedCatalogImageUrl(trimmed)) {
+                    return existing.imageUrl;
+                  }
+                  return trimmed;
+                })(),
+              }
             : {}),
           ...(shouldUpdateBrand ? { brandId } : {}),
           ...(shouldUpdateCategory ? { categoryId } : {}),

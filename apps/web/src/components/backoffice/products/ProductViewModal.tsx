@@ -10,6 +10,7 @@ import {
   ModalHeader,
 } from "@heroui/react";
 import type { ProductListItemDto } from "@gulio/contracts";
+import { mediaSrc } from "@/lib/api";
 import { formatMoney } from "@/lib/money";
 
 type Props = {
@@ -34,7 +35,9 @@ export function ProductViewModal({
   canManage,
   onEdit,
 }: Props) {
-  const imageUrl = product?.imageUrl ?? product?.variants[0]?.imageUrl ?? null;
+  const imageUrl = mediaSrc(
+    product?.imageUrl ?? product?.variants[0]?.imageUrl ?? null,
+  );
 
   return (
     <Modal

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { CatalogRow } from "./product-insights";
+import { mediaSrc } from "@/lib/api";
 
 type Props = {
   row: CatalogRow;
@@ -16,15 +17,16 @@ function initials(name: string): string {
 
 export function ProductHeroCard({ row }: Props) {
   const [broken, setBroken] = useState(false);
-  const showImage = Boolean(row.imageUrl) && !broken;
+  const src = mediaSrc(row.imageUrl);
+  const showImage = Boolean(src) && !broken;
 
   return (
     <div className="overflow-hidden rounded-2xl border border-gulio-border bg-gradient-to-br from-white via-teal-50/40 to-slate-50 shadow-sm transition-all duration-300">
       <div className="relative aspect-[16/10] w-full overflow-hidden bg-gulio-bg">
-        {showImage && row.imageUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element -- external seed URLs
+        {showImage && src ? (
+          // eslint-disable-next-line @next/next/no-img-element -- catalog images are served by the API
           <img
-            src={row.imageUrl}
+            src={src}
             alt=""
             className="h-full w-full object-cover transition-transform duration-500 hover:scale-[1.03]"
             onError={() => setBroken(true)}

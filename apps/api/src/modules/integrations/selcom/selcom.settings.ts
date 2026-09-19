@@ -24,6 +24,14 @@ function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+/** Selcom client appends /v1/checkout/... — host must not already include /v1. */
+export function normalizeSelcomBaseUrl(value: string): string {
+  return value
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/\/v1$/i, "");
+}
+
 function maskSecret(value: string): string {
   if (!value) return "";
   if (value.length <= 4) return "••••";
@@ -34,7 +42,7 @@ export function parseStoredSelcomSettings(settings: unknown): StoredSelcomSettin
   const raw = asRecord(asRecord(settings)?.selcom);
   return {
     enabled: raw?.enabled === true,
-    baseUrl: asString(raw?.baseUrl),
+    baseUrl: normalizeSelcomBaseUrl(asString(raw?.baseUrl)),
     merchantId: asString(raw?.merchantId),
     webhookUrl: asString(raw?.webhookUrl),
     redirectUrl: asString(raw?.redirectUrl),
@@ -86,7 +94,9 @@ export function mergeSelcomSettings(
   if (!patch) return { ...root, selcom: next };
 
   if (patch.enabled !== undefined) next.enabled = Boolean(patch.enabled);
-  if (patch.baseUrl !== undefined) next.baseUrl = patch.baseUrl.trim();
+  if (patch.baseUrl !== undefined) {
+    next.baseUrl = normalizeSelcomBaseUrl(patch.baseUrl);
+  }
   if (patch.merchantId !== undefined) next.merchantId = patch.merchantId.trim();
   if (patch.webhookUrl !== undefined) next.webhookUrl = patch.webhookUrl.trim();
   if (patch.redirectUrl !== undefined) next.redirectUrl = patch.redirectUrl.trim();

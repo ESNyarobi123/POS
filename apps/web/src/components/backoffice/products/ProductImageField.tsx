@@ -2,6 +2,8 @@
 
 import { useId, useRef, useState, type ChangeEvent } from "react";
 import { ImagePlus, Link2, Upload, X } from "lucide-react";
+import type { UploadCatalogImageResponse } from "@gulio/contracts";
+import { ApiError, apiFetch, mediaSrc } from "@/lib/api";
 
 export type ImageSourceMode = "url" | "upload";
 
@@ -59,8 +61,13 @@ export function ProductImageField({
 
   const trimmed = safeValue.trim();
   const urlInputValue = safeValue.startsWith("data:") ? "" : safeValue;
+  const previewSrc = mediaSrc(trimmed);
   const showPreview =
-    (trimmed.startsWith("https://") || trimmed.startsWith("data:image/")) &&
+    Boolean(previewSrc) &&
+    (trimmed.startsWith("https://") ||
+      trimmed.startsWith("http://") ||
+      trimmed.startsWith("data:image/") ||
+      trimmed.startsWith("/catalog/")) &&
     !previewBroken;
 
   async function onFilePicked(e: ChangeEvent<HTMLInputElement>) {
@@ -81,12 +88,20 @@ export function ProductImageField({
     setReading(true);
     try {
       const dataUrl = await readFileAsDataUrl(file);
-      onChange(dataUrl);
+      const uploaded = await apiFetch<UploadCatalogImageResponse>(
+        "/catalog/media",
+        { method: "POST", body: { image: dataUrl } },
+      );
+      onChange(uploaded.url);
       setFileName(file.name);
       onBrokenChange?.(false);
       setMode("upload");
-    } catch {
-      setUploadError("Could not read that file");
+    } catch (err) {
+      setUploadError(
+        err instanceof ApiError
+          ? err.message
+          : "Could not upload that image",
+      );
     } finally {
       setReading(false);
     }
@@ -208,7 +223,7 @@ export function ProductImageField({
               >
                 <ImagePlus size={16} className="text-teal-700" />
                 {reading
-                  ? "Reading…"
+                  ? "Uploading…"
                   : fileName
                     ? "Replace image"
                     : "Choose image"}
@@ -235,7 +250,7 @@ export function ProductImageField({
                 <ImagePlus size={20} />
               </span>
               <span className="text-sm font-semibold text-gulio-text">
-                {reading ? "Reading image…" : "Click to choose image"}
+                {reading ? "Uploading image…" : "Click to choose image"}
               </span>
               <span className="text-xs text-gulio-muted">
                 JPG, PNG, WebP or GIF · max {MAX_MB_LABEL}
@@ -263,8 +278,8 @@ export function ProductImageField({
             <p className="truncate text-xs text-gulio-muted">{fileName}</p>
           ) : !compact ? (
             <p className="text-xs text-gulio-muted">
-              Uploaded images save with the product for now. Cloud storage (MinIO)
-              comes next.
+              Uploaded photos are compressed on the server (WebP) so POS stays
+              light.
             </p>
           ) : null}
         </div>
@@ -284,7 +299,7 @@ export function ProductImageField({
         <div className="mt-1 overflow-hidden rounded-xl border border-gulio-border">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={trimmed}
+            src={previewSrc ?? trimmed}
             alt=""
             className="h-24 w-full object-cover"
             onError={() => onBrokenChange?.(true)}
@@ -301,8 +316,13 @@ export function productImagePreviewSrc(
 ): string | null {
   const trimmed = (value ?? "").trim();
   if (broken) return null;
-  if (trimmed.startsWith("https://") || trimmed.startsWith("data:image/")) {
-    return trimmed;
+  if (
+    trimmed.startsWith("https://") ||
+    trimmed.startsWith("http://") ||
+    trimmed.startsWith("data:image/") ||
+    trimmed.startsWith("/catalog/")
+  ) {
+    return mediaSrc(trimmed);
   }
   return null;
 }

@@ -183,16 +183,23 @@ export class SelcomClient {
     try {
       body = await response.json();
     } catch {
-      throw new SelcomTransportError("Selcom returned invalid JSON");
+      throw new SelcomTransportError(
+        `Selcom returned invalid JSON (HTTP ${response.status})`,
+      );
     }
 
-    if (!response.ok) {
-      throw new SelcomTransportError(`Selcom HTTP error: ${response.status}`);
-    }
     if (!body || typeof body !== "object" || Array.isArray(body)) {
       throw new SelcomTransportError("Unexpected Selcom response shape");
     }
-    return body as SelcomJson;
+    const rec = body as SelcomJson;
+    if (!response.ok && rec.resultcode == null) {
+      const message =
+        typeof rec.message === "string" && rec.message.trim()
+          ? rec.message.trim()
+          : `Selcom HTTP error: ${response.status}`;
+      throw new SelcomTransportError(message);
+    }
+    return rec;
   }
 
   createMinimalOrder(data: Record<string, unknown>) {
