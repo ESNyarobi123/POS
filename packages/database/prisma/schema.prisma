@@ -37,6 +37,8 @@ enum SerialStatus {
   IN_REPAIR
   SUPPLIER_RETURN
   TRANSFERRED
+  /// Owner removed the unit from inventory; ledger rows stay (never delete movements).
+  REMOVED
 }
 
 enum StockMovementType {

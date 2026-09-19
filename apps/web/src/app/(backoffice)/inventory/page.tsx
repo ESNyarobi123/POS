@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Eye } from "lucide-react";
 import type {
   ProductListResponse,
   StockBalanceDto,
@@ -15,6 +16,7 @@ import {
 import { ProductThumb } from "@/components/backoffice/ProductThumb";
 import { StatCard } from "@/components/backoffice/StatCard";
 import { AddStockModal } from "@/components/backoffice/inventory/AddStockModal";
+import { InventorySerialsModal } from "@/components/backoffice/inventory/InventorySerialsModal";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
 import { formatMoney } from "@/lib/money";
@@ -51,6 +53,7 @@ export default function InventoryPage() {
     can(PermissionCode.STOCK_VIEW) || isOwner() || isManager();
   const canAdjust =
     can(PermissionCode.STOCK_ADJUST) || isOwner() || isManager();
+  const canInspectSerials = isOwner();
 
   const warehouses = orgContext?.warehouses ?? [];
   const [warehouseId, setWarehouseId] = useState<string | null>(null);
@@ -60,6 +63,7 @@ export default function InventoryPage() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "low" | "ok">("all");
   const [addOpen, setAddOpen] = useState(false);
+  const [serialsVariantId, setSerialsVariantId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
@@ -347,6 +351,17 @@ export default function InventoryPage() {
             <DataTableRow key={row.id} warn={row.low}>
               <DataTableCell className="min-w-[220px] px-5 py-3.5">
                 <div className="flex items-center gap-3">
+                  {canInspectSerials ? (
+                    <button
+                      type="button"
+                      onClick={() => setSerialsVariantId(row.variantId)}
+                      className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border-2 border-slate-200 bg-white text-teal-700 transition hover:border-teal-500 hover:bg-teal-50"
+                      aria-label={`View serials for ${row.name}`}
+                      title="View serials"
+                    >
+                      <Eye size={16} strokeWidth={2.25} />
+                    </button>
+                  ) : null}
                   <ProductThumb imageUrl={row.imageUrl} name={row.name} />
                   <div className="min-w-0">
                     <p className="truncate font-medium text-gulio-text">
@@ -399,6 +414,16 @@ export default function InventoryPage() {
           warehouseName={warehouse.name}
           onClose={() => setAddOpen(false)}
           onSaved={() => setReloadKey((k) => k + 1)}
+        />
+      ) : null}
+
+      {warehouse && canInspectSerials ? (
+        <InventorySerialsModal
+          isOpen={serialsVariantId !== null}
+          variantId={serialsVariantId}
+          warehouseId={warehouse.id}
+          onClose={() => setSerialsVariantId(null)}
+          onStockChanged={() => setReloadKey((k) => k + 1)}
         />
       ) : null}
     </div>

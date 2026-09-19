@@ -24,6 +24,7 @@ export const SERIAL_STATUSES = [
   "IN_REPAIR",
   "SUPPLIER_RETURN",
   "TRANSFERRED",
+  "REMOVED",
 ] as const;
 
 export type SerialStatus = (typeof SERIAL_STATUSES)[number];
@@ -139,4 +140,41 @@ export type CreateStockAdjustmentRequest = {
   quantityDelta: number;
   reason: string;
   serialNumbers?: string[];
+};
+
+/** Owner serial inspector — product titles + serial units for one SKU in a warehouse. */
+export type VariantSerialPanelDto = {
+  variantId: string;
+  productId: string;
+  productName: string;
+  productDescription: string | null;
+  brandName: string | null;
+  categoryName: string | null;
+  variantName: string;
+  sku: string;
+  imageUrl: string | null;
+  tracksSerial: boolean;
+  sellPrice: DecimalString;
+  warehouseId: string;
+  warehouseName: string;
+  quantityOnHand: DecimalString;
+  quantityReserved: DecimalString;
+  quantityAvailable: DecimalString;
+  serials: SerialUnitDto[];
+};
+
+export type UpdateSerialUnitRequest = {
+  serialNumber: string;
+  reason: string;
+};
+
+export type RemoveSerialUnitRequest = {
+  reason: string;
+};
+
+export type RemoveSerialUnitResult = {
+  serial: SerialUnitDto;
+  /** Present when the unit was IN_STOCK and on-hand qty was written down. */
+  movement: StockMovementDto | null;
+  balance: StockBalanceDto | null;
 };

@@ -4,7 +4,10 @@ import {
   Controller,
   DefaultValuePipe,
   Get,
+  Param,
   ParseEnumPipe,
+  ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -12,17 +15,21 @@ import {
 import {
   PermissionCode,
   type CreateStockAdjustmentRequest,
+  type RemoveSerialUnitRequest,
+  type UpdateSerialUnitRequest,
 } from "@gulio/contracts";
 import { SerialStatus } from "@gulio/database";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { Permissions } from "../auth/decorators/permissions.decorator";
+import { Roles } from "../auth/decorators/roles.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { PermissionsGuard } from "../auth/guards/permissions.guard";
+import { RolesGuard } from "../auth/guards/roles.guard";
 import type { RequestUser } from "../auth/types/request-user";
 import { InventoryService } from "./inventory.service";
 
 @Controller("inventory")
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, RolesGuard)
 export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) {}
 
@@ -62,6 +69,58 @@ export class InventoryController {
       variantId,
       warehouseId,
       status,
+    );
+  }
+
+  @Get("variants/:variantId/serials")
+  @Roles("OWNER")
+  @Permissions(PermissionCode.STOCK_SERIAL_FIX)
+  getVariantSerials(
+    @CurrentUser() user: RequestUser,
+    @Param("variantId", ParseUUIDPipe) variantId: string,
+    @Query("warehouseId") warehouseId: string,
+    @Query("includeRemoved") includeRemovedRaw?: string,
+  ) {
+    if (!warehouseId) {
+      throw new BadRequestException("warehouseId is required");
+    }
+    const includeRemoved =
+      includeRemovedRaw === "1" || includeRemovedRaw === "true";
+    return this.inventoryService.getVariantSerialPanel(
+      user,
+      variantId,
+      warehouseId,
+      includeRemoved,
+    );
+  }
+
+  @Patch("serials/:serialId")
+  @Roles("OWNER")
+  @Permissions(PermissionCode.STOCK_SERIAL_FIX)
+  updateSerial(
+    @CurrentUser() user: RequestUser,
+    @Param("serialId", ParseUUIDPipe) serialId: string,
+    @Body() body: UpdateSerialUnitRequest,
+  ) {
+    return this.inventoryService.updateSerialUnit(
+      user,
+      serialId,
+      body ?? ({} as UpdateSerialUnitRequest),
+    );
+  }
+
+  @Post("serials/:serialId/remove")
+  @Roles("OWNER")
+  @Permissions(PermissionCode.STOCK_SERIAL_FIX)
+  removeSerial(
+    @CurrentUser() user: RequestUser,
+    @Param("serialId", ParseUUIDPipe) serialId: string,
+    @Body() body: RemoveSerialUnitRequest,
+  ) {
+    return this.inventoryService.removeSerialUnit(
+      user,
+      serialId,
+      body ?? ({} as RemoveSerialUnitRequest),
     );
   }
 

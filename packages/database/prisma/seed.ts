@@ -52,7 +52,9 @@ const ALL_CODES = PERMISSIONS.map((p) => p.code);
 
 const ROLE_PERMISSIONS: Record<string, string[]> = {
   OWNER: ALL_CODES,
-  MANAGER: ALL_CODES.filter((c) => c !== "org.manage"),
+  MANAGER: ALL_CODES.filter(
+    (c) => c !== "org.manage" && c !== "stock.serial_fix",
+  ),
   CASHIER: [
     "shift.open_own",
     "pos.sell",

@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   UnprocessableEntityException,
@@ -21,11 +23,15 @@ import type {
   CommitSaleMovementResult,
   CreateStockAdjustmentRequest,
   DecimalString,
+  RemoveSerialUnitRequest,
+  RemoveSerialUnitResult,
   SerialStatus as ContractSerialStatus,
   SerialUnitDto,
   StockBalanceDto,
   StockMovementDto,
   StockMovementType as ContractMovementType,
+  UpdateSerialUnitRequest,
+  VariantSerialPanelDto,
 } from "@gulio/contracts";
 import { PrismaService } from "../../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
@@ -93,6 +99,42 @@ function mapSerial(row: SerialUnit): SerialUnitDto {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+const SERIAL_NUMBER_MAX_LEN = 64;
+
+const REMOVABLE_OFF_HAND = new Set<SerialStatus>([
+  SerialStatus.DAMAGED,
+  SerialStatus.RETURNED,
+  SerialStatus.IN_REPAIR,
+  SerialStatus.SUPPLIER_RETURN,
+]);
+
+function assertOwner(user: RequestUser): void {
+  const roles = (user.roles ?? []).map((role) => role.toUpperCase());
+  if (!roles.includes("OWNER")) {
+    throw new ForbiddenException(
+      "Only the owner can inspect or edit serial units",
+    );
+  }
+}
+
+function requireReason(reason: string | undefined): string {
+  const trimmed = reason?.trim() ?? "";
+  if (trimmed.length < 3) {
+    throw new BadRequestException("reason must be at least 3 characters");
+  }
+  return trimmed;
+}
+
+function normalizeSerialNumber(raw: string | undefined): string {
+  const serialNumber = raw?.trim() ?? "";
+  if (serialNumber.length < 1 || serialNumber.length > SERIAL_NUMBER_MAX_LEN) {
+    throw new BadRequestException(
+      `serialNumber must be 1–${SERIAL_NUMBER_MAX_LEN} characters`,
+    );
+  }
+  return serialNumber;
 }
 
 @Injectable()
@@ -589,6 +631,289 @@ export class InventoryService {
       orderBy: { variantId: "asc" },
     });
     return rows.map(mapBalance);
+  }
+
+  /**
+   * Owner inspector: product titles + all serials for a SKU in one warehouse.
+   */
+  async getVariantSerialPanel(
+    user: RequestUser,
+    variantId: string,
+    warehouseId: string,
+    includeRemoved = false,
+  ): Promise<VariantSerialPanelDto> {
+    assertOwner(user);
+
+    const warehouse = await this.prisma.warehouse.findFirst({
+      where: { id: warehouseId, organizationId: user.organizationId },
+    });
+    if (!warehouse) {
+      throw new NotFoundException("Warehouse not found");
+    }
+
+    const variant = await this.prisma.variant.findFirst({
+      where: { id: variantId, organizationId: user.organizationId },
+      include: {
+        product: {
+          include: { brand: true, category: true },
+        },
+      },
+    });
+    if (!variant) {
+      throw new NotFoundException("Variant not found");
+    }
+
+    const [balance, serials] = await Promise.all([
+      this.prisma.stockBalance.findUnique({
+        where: {
+          warehouseId_variantId: { warehouseId, variantId },
+        },
+      }),
+      this.prisma.serialUnit.findMany({
+        where: {
+          organizationId: user.organizationId,
+          variantId,
+          warehouseId,
+          ...(includeRemoved ? {} : { status: { not: SerialStatus.REMOVED } }),
+        },
+        orderBy: [{ serialNumber: "asc" }],
+      }),
+    ]);
+
+    const emptyQty = "0.0000";
+    return {
+      variantId: variant.id,
+      productId: variant.product.id,
+      productName: variant.product.name,
+      productDescription: variant.product.description,
+      brandName: variant.product.brand?.name ?? null,
+      categoryName: variant.product.category?.name ?? null,
+      variantName: variant.name,
+      sku: variant.sku,
+      imageUrl: variant.imageUrl ?? variant.product.imageUrl,
+      tracksSerial: variant.tracksSerial,
+      sellPrice: toDecimalString(variant.sellPrice),
+      warehouseId: warehouse.id,
+      warehouseName: warehouse.name,
+      quantityOnHand: balance ? toDecimalString(balance.quantityOnHand) : emptyQty,
+      quantityReserved: balance
+        ? toDecimalString(balance.quantityReserved)
+        : emptyQty,
+      quantityAvailable: balance
+        ? toDecimalString(availableQty(balance))
+        : emptyQty,
+      serials: serials.map(mapSerial),
+    };
+  }
+
+  /** Owner IMEI correction — unique per org; audited. Does not change stock qty. */
+  async updateSerialUnit(
+    user: RequestUser,
+    serialId: string,
+    body: UpdateSerialUnitRequest,
+  ): Promise<SerialUnitDto> {
+    assertOwner(user);
+    const reason = requireReason(body.reason);
+    const serialNumber = normalizeSerialNumber(body.serialNumber);
+
+    const existing = await this.prisma.serialUnit.findFirst({
+      where: { id: serialId, organizationId: user.organizationId },
+    });
+    if (!existing) {
+      throw new NotFoundException("Serial unit not found");
+    }
+    if (existing.status === SerialStatus.REMOVED) {
+      throw new UnprocessableEntityException({
+        code: "SERIAL_REMOVED",
+        message: "Cannot edit a removed serial unit",
+      });
+    }
+
+    if (existing.serialNumber === serialNumber) {
+      return mapSerial(existing);
+    }
+
+    const clash = await this.prisma.serialUnit.findFirst({
+      where: {
+        organizationId: user.organizationId,
+        id: { not: serialId },
+        serialNumber: { equals: serialNumber, mode: "insensitive" },
+      },
+    });
+    if (clash) {
+      throw new ConflictException(
+        `Serial number already exists: ${serialNumber}`,
+      );
+    }
+
+    let updated: SerialUnit;
+    try {
+      updated = await this.prisma.serialUnit.update({
+        where: { id: existing.id },
+        data: { serialNumber },
+      });
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === "P2002"
+      ) {
+        throw new ConflictException(
+          `Serial number already exists: ${serialNumber}`,
+        );
+      }
+      throw err;
+    }
+
+    await this.audit.log({
+      action: "stock.serial_fix",
+      entityType: "SerialUnit",
+      entityId: updated.id,
+      userId: user.userId,
+      orgId: user.organizationId,
+      before: {
+        serialNumber: existing.serialNumber,
+        status: existing.status,
+      },
+      meta: {
+        serialNumber: updated.serialNumber,
+        status: updated.status,
+        variantId: updated.variantId,
+        warehouseId: updated.warehouseId,
+        reason,
+      },
+    });
+
+    return mapSerial(updated);
+  }
+
+  /**
+   * Owner remove: IN_STOCK units write down via ADJUSTMENT −1 then status REMOVED.
+   * Ledger rows are never deleted. Sold/reserved units cannot be removed.
+   */
+  async removeSerialUnit(
+    user: RequestUser,
+    serialId: string,
+    body: RemoveSerialUnitRequest,
+  ): Promise<RemoveSerialUnitResult> {
+    assertOwner(user);
+    const reason = requireReason(body.reason);
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const serial = await tx.serialUnit.findFirst({
+        where: { id: serialId, organizationId: user.organizationId },
+      });
+      if (!serial) {
+        throw new NotFoundException("Serial unit not found");
+      }
+      if (serial.status === SerialStatus.REMOVED) {
+        throw new UnprocessableEntityException({
+          code: "SERIAL_REMOVED",
+          message: "Serial unit is already removed",
+        });
+      }
+      if (
+        serial.status === SerialStatus.SOLD ||
+        serial.status === SerialStatus.RESERVED ||
+        serial.status === SerialStatus.TRANSFERRED
+      ) {
+        throw new UnprocessableEntityException({
+          code: "SERIAL_NOT_REMOVABLE",
+          message: `Serial ${serial.serialNumber} is ${serial.status} and cannot be removed`,
+        });
+      }
+
+      let movement: StockMovement | null = null;
+      let balance: StockBalance | null = null;
+
+      if (serial.status === SerialStatus.IN_STOCK) {
+        const locked = await this.lockBalance(
+          tx,
+          user.organizationId,
+          serial.warehouseId,
+          serial.variantId,
+        );
+        const available = availableQty(locked);
+        if (available.lt(1)) {
+          throw new UnprocessableEntityException({
+            code: "INSUFFICIENT_STOCK",
+            message: `Insufficient stock to remove serial ${serial.serialNumber}`,
+            available: toDecimalString(available),
+            requested: "1.0000",
+          });
+        }
+
+        movement = await tx.stockMovement.create({
+          data: {
+            organizationId: user.organizationId,
+            warehouseId: serial.warehouseId,
+            variantId: serial.variantId,
+            movementType: StockMovementType.ADJUSTMENT,
+            quantityDelta: new Prisma.Decimal(-1),
+            referenceType: "SerialUnit",
+            referenceId: serial.id,
+            serialUnitId: serial.id,
+            createdByUserId: user.userId,
+            reason,
+          },
+        });
+
+        balance = await tx.stockBalance.update({
+          where: { id: locked.id },
+          data: {
+            quantityOnHand: { decrement: new Prisma.Decimal(1) },
+          },
+        });
+      } else if (!REMOVABLE_OFF_HAND.has(serial.status)) {
+        throw new UnprocessableEntityException({
+          code: "SERIAL_NOT_REMOVABLE",
+          message: `Serial ${serial.serialNumber} is ${serial.status} and cannot be removed`,
+        });
+      } else {
+        balance = await tx.stockBalance.findUnique({
+          where: {
+            warehouseId_variantId: {
+              warehouseId: serial.warehouseId,
+              variantId: serial.variantId,
+            },
+          },
+        });
+      }
+
+      const updated = await tx.serialUnit.update({
+        where: { id: serial.id },
+        data: { status: SerialStatus.REMOVED },
+      });
+
+      return {
+        previousStatus: serial.status,
+        serial: updated,
+        movement,
+        balance,
+      };
+    });
+
+    await this.audit.log({
+      action: "stock.serial_remove",
+      entityType: "SerialUnit",
+      entityId: result.serial.id,
+      userId: user.userId,
+      orgId: user.organizationId,
+      before: { status: result.previousStatus },
+      meta: {
+        serialNumber: result.serial.serialNumber,
+        status: result.serial.status,
+        variantId: result.serial.variantId,
+        warehouseId: result.serial.warehouseId,
+        reason,
+        movementId: result.movement?.id ?? null,
+      },
+    });
+
+    return {
+      serial: mapSerial(result.serial),
+      movement: result.movement ? mapMovement(result.movement) : null,
+      balance: result.balance ? mapBalance(result.balance) : null,
+    };
   }
 
   private resolveReturnSerialStatus(

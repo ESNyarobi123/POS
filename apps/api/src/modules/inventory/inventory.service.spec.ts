@@ -1,6 +1,12 @@
-import { UnprocessableEntityException } from "@nestjs/common";
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+  UnprocessableEntityException,
+} from "@nestjs/common";
 import { Prisma, SerialStatus, StockMovementType } from "@gulio/database";
 import { InventoryService } from "./inventory.service";
+import type { RequestUser } from "../auth/types/request-user";
 
 type MockBalance = {
   id: string;
@@ -138,6 +144,8 @@ function createTxMock(
     },
     serialUnit: {
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
+      findMany: jest.fn(),
       update: jest.fn(),
       create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
         const row = {
@@ -386,5 +394,277 @@ describe("InventoryService.commitAdjustment", () => {
     expect(serials).toHaveLength(2);
     expect(movements).toHaveLength(2);
     expect(tx.stockBalance.create).toHaveBeenCalled();
+  });
+});
+
+const orgId = "11111111-1111-1111-1111-111111111111";
+const warehouseId = "33333333-3333-3333-3333-333333333333";
+const variantId = "44444444-4444-4444-4444-444444444444";
+const serialId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+
+const ownerUser: RequestUser = {
+  userId: "user-owner",
+  organizationId: orgId,
+  email: "owner@guliosmart.local",
+  roles: ["OWNER"],
+  permissions: ["stock.serial_fix"],
+  branchIds: [],
+};
+
+const managerUser: RequestUser = {
+  ...ownerUser,
+  userId: "user-manager",
+  email: "manager@guliosmart.local",
+  roles: ["MANAGER"],
+};
+
+function serialRow(overrides: Record<string, unknown> = {}) {
+  const now = new Date("2026-09-19T12:00:00.000Z");
+  return {
+    id: serialId,
+    organizationId: orgId,
+    variantId,
+    warehouseId,
+    serialNumber: "860000000000001",
+    status: SerialStatus.IN_STOCK,
+    currentSaleItemId: null,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+describe("InventoryService owner serial panel", () => {
+  it("rejects non-owner", async () => {
+    const service = new InventoryService(
+      {} as never,
+      { log: jest.fn() } as never,
+    );
+    await expect(
+      service.getVariantSerialPanel(managerUser, variantId, warehouseId),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it("returns product titles and serials for the warehouse", async () => {
+    const serial = serialRow();
+    const prisma = {
+      warehouse: {
+        findFirst: jest.fn(async () => ({
+          id: warehouseId,
+          name: "Main Store",
+          organizationId: orgId,
+        })),
+      },
+      variant: {
+        findFirst: jest.fn(async () => ({
+          id: variantId,
+          sku: "GUL-A07-128",
+          name: "128GB Black",
+          tracksSerial: true,
+          sellPrice: new Prisma.Decimal("1850000"),
+          imageUrl: null,
+          product: {
+            id: "prod-1",
+            name: "iPhone 15",
+            description: "Demo phone",
+            imageUrl: "https://img.example/p.png",
+            brand: { name: "Apple" },
+            category: { name: "Phones" },
+          },
+        })),
+      },
+      stockBalance: {
+        findUnique: jest.fn(async () => ({
+          id: "bal-1",
+          organizationId: orgId,
+          warehouseId,
+          variantId,
+          quantityOnHand: new Prisma.Decimal(2),
+          quantityReserved: new Prisma.Decimal(0),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })),
+      },
+      serialUnit: {
+        findMany: jest.fn(async () => [serial]),
+      },
+    };
+    const service = new InventoryService(
+      prisma as never,
+      { log: jest.fn() } as never,
+    );
+
+    const panel = await service.getVariantSerialPanel(
+      ownerUser,
+      variantId,
+      warehouseId,
+    );
+
+    expect(panel.productName).toBe("iPhone 15");
+    expect(panel.sku).toBe("GUL-A07-128");
+    expect(panel.tracksSerial).toBe(true);
+    expect(panel.quantityOnHand).toBe("2.0000");
+    expect(panel.serials).toHaveLength(1);
+    expect(panel.serials[0].serialNumber).toBe("860000000000001");
+    expect(prisma.serialUnit.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: { not: SerialStatus.REMOVED },
+        }),
+      }),
+    );
+  });
+});
+
+describe("InventoryService.updateSerialUnit", () => {
+  it("rejects non-owner", async () => {
+    const service = new InventoryService(
+      {} as never,
+      { log: jest.fn() } as never,
+    );
+    await expect(
+      service.updateSerialUnit(managerUser, serialId, {
+        serialNumber: "860000000000099",
+        reason: "typo",
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it("updates IMEI and writes audit", async () => {
+    const existing = serialRow();
+    const updated = serialRow({ serialNumber: "860000000000099" });
+    const prisma = {
+      serialUnit: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(existing)
+          .mockResolvedValueOnce(null),
+        update: jest.fn(async () => updated),
+      },
+    };
+    const audit = { log: jest.fn() };
+    const service = new InventoryService(prisma as never, audit as never);
+
+    const result = await service.updateSerialUnit(ownerUser, serialId, {
+      serialNumber: "860000000000099",
+      reason: "Corrected IMEI typo",
+    });
+
+    expect(result.serialNumber).toBe("860000000000099");
+    expect(prisma.serialUnit.update).toHaveBeenCalledWith({
+      where: { id: serialId },
+      data: { serialNumber: "860000000000099" },
+    });
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "stock.serial_fix",
+        entityId: serialId,
+        before: expect.objectContaining({ serialNumber: "860000000000001" }),
+      }),
+    );
+  });
+
+  it("rejects duplicate serial numbers", async () => {
+    const existing = serialRow();
+    const prisma = {
+      serialUnit: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(existing)
+          .mockResolvedValueOnce(serialRow({ id: "other" })),
+        update: jest.fn(),
+      },
+    };
+    const service = new InventoryService(
+      prisma as never,
+      { log: jest.fn() } as never,
+    );
+
+    await expect(
+      service.updateSerialUnit(ownerUser, serialId, {
+        serialNumber: "860000000000002",
+        reason: "reassign",
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.serialUnit.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("InventoryService.removeSerialUnit", () => {
+  const baseBalance: MockBalance = {
+    id: "bal-1",
+    organizationId: orgId,
+    warehouseId,
+    variantId,
+    quantityOnHand: new Prisma.Decimal(3),
+    quantityReserved: new Prisma.Decimal(0),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  it("rejects sold serials", async () => {
+    const { tx } = createTxMock(baseBalance);
+    tx.serialUnit.findFirst = jest.fn(async () =>
+      serialRow({ status: SerialStatus.SOLD }),
+    );
+    const prisma = {
+      $transaction: jest.fn(async (fn: (t: typeof tx) => unknown) => fn(tx)),
+    };
+    const service = new InventoryService(
+      prisma as never,
+      { log: jest.fn() } as never,
+    );
+
+    await expect(
+      service.removeSerialUnit(ownerUser, serialId, {
+        reason: "Wrong IMEI entered",
+      }),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+  });
+
+  it("writes ADJUSTMENT -1 and marks IN_STOCK serial REMOVED", async () => {
+    const { tx, getBalance, movements } = createTxMock(baseBalance);
+    const existing = serialRow();
+    tx.serialUnit.findFirst = jest.fn(async () => existing);
+    tx.serialUnit.update = jest.fn(async () =>
+      serialRow({ status: SerialStatus.REMOVED }),
+    );
+    const audit = { log: jest.fn() };
+    const prisma = {
+      $transaction: jest.fn(async (fn: (t: typeof tx) => unknown) => fn(tx)),
+    };
+    const service = new InventoryService(prisma as never, audit as never);
+
+    const result = await service.removeSerialUnit(ownerUser, serialId, {
+      reason: "Wrong IMEI entered",
+    });
+
+    expect(result.serial.status).toBe(SerialStatus.REMOVED);
+    expect(result.movement?.movementType).toBe(StockMovementType.ADJUSTMENT);
+    expect(result.movement?.quantityDelta).toBe("-1.0000");
+    expect(result.balance?.quantityOnHand).toBe("2.0000");
+    expect(getBalance()!.quantityOnHand.equals(2)).toBe(true);
+    expect(movements).toHaveLength(1);
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "stock.serial_remove" }),
+    );
+  });
+
+  it("returns not found when serial is missing", async () => {
+    const { tx } = createTxMock(baseBalance);
+    tx.serialUnit.findFirst = jest.fn(async () => null);
+    const prisma = {
+      $transaction: jest.fn(async (fn: (t: typeof tx) => unknown) => fn(tx)),
+    };
+    const service = new InventoryService(
+      prisma as never,
+      { log: jest.fn() } as never,
+    );
+
+    await expect(
+      service.removeSerialUnit(ownerUser, serialId, {
+        reason: "cleanup unit",
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 });
