@@ -170,7 +170,10 @@ export function InventorySerialsModal({
           body: { reason: removeReason },
         },
       );
-      toast.success("Serial removed", "Stock ledger was updated.");
+      toast.success(
+        "Serial removed",
+        "You can add this IMEI again on another product.",
+      );
       setRemovingId(null);
       await load();
       onStockChanged();
@@ -367,8 +370,8 @@ export function InventorySerialsModal({
                               <div className="mt-3 space-y-2 border-t border-rose-100 pt-3">
                                 <p className="text-xs text-rose-800">
                                   {serial.status === "IN_STOCK"
-                                    ? "This writes the unit off the ledger (−1) and hides it. Sales history is kept."
-                                    : "This hides the serial. On-hand qty does not change because it is not in stock."}
+                                    ? "This writes the unit off the ledger (−1). You can add this IMEI again on another product. Sales history is kept."
+                                    : "This frees the IMEI so you can add it again. On-hand qty does not change because it is not in stock."}
                                 </p>
                                 <label className="block text-xs font-semibold text-gulio-muted">
                                   Reason

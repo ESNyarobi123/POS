@@ -395,6 +395,64 @@ describe("InventoryService.commitAdjustment", () => {
     expect(movements).toHaveLength(2);
     expect(tx.stockBalance.create).toHaveBeenCalled();
   });
+
+  it("rejects intake when a live serial already exists", async () => {
+    const { tx } = createTxMock(null, {
+      tracksSerial: true,
+      variantId,
+      organizationId: orgId,
+    });
+    tx.serialUnit.findFirst = jest.fn(async () => ({
+      id: "live-serial",
+      serialNumber: "IMEI-1001",
+      status: SerialStatus.IN_STOCK,
+    }));
+    const service = createService();
+
+    await expect(
+      service.commitAdjustment(tx as never, {
+        organizationId: orgId,
+        warehouseId,
+        variantId,
+        quantityDelta: 1,
+        reason: "IMEI intake",
+        serialNumbers: ["IMEI-1001"],
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(tx.serialUnit.create).not.toHaveBeenCalled();
+  });
+
+  it("creates a new serial when the same IMEI was previously REMOVED", async () => {
+    const { tx, serials } = createTxMock(null, {
+      tracksSerial: true,
+      variantId,
+      organizationId: orgId,
+    });
+    tx.serialUnit.findFirst = jest.fn(async () => null);
+    const service = createService();
+
+    const result = await service.commitAdjustment(tx as never, {
+      organizationId: orgId,
+      warehouseId,
+      variantId,
+      quantityDelta: 1,
+      reason: "Re-add IMEI after remove",
+      serialNumbers: ["IMEI-1001"],
+    });
+
+    expect(result.serials).toHaveLength(1);
+    expect(result.serials[0].id).toBe("serial-1");
+    expect(result.serials[0].serialNumber).toBe("IMEI-1001");
+    expect(result.serials[0].status).toBe(SerialStatus.IN_STOCK);
+    expect(serials).toHaveLength(1);
+    expect(tx.serialUnit.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: { not: SerialStatus.REMOVED },
+        }),
+      }),
+    );
+  });
 });
 
 const orgId = "11111111-1111-1111-1111-111111111111";
@@ -560,6 +618,14 @@ describe("InventoryService.updateSerialUnit", () => {
         action: "stock.serial_fix",
         entityId: serialId,
         before: expect.objectContaining({ serialNumber: "860000000000001" }),
+      }),
+    );
+    expect(prisma.serialUnit.findFirst).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: { not: SerialStatus.REMOVED },
+        }),
       }),
     );
   });

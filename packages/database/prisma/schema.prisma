@@ -544,7 +544,9 @@ model SerialUnit {
   saleItemSerials SaleItemSerial[]
   returnItems     ReturnItem[]
 
-  @@unique([organizationId, serialNumber])
+  // Live uniqueness is a partial unique index in SQL:
+  // (organization_id, serial_number) WHERE status <> 'REMOVED'
+  @@index([organizationId, serialNumber])
   @@index([warehouseId, variantId, status])
   @@index([organizationId])
   @@map("serial_units")

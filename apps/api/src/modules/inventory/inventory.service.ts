@@ -137,6 +137,31 @@ function normalizeSerialNumber(raw: string | undefined): string {
   return serialNumber;
 }
 
+function liveSerialNumberWhere(
+  organizationId: string,
+  serialNumber: string,
+  excludeId?: string,
+) {
+  return {
+    organizationId,
+    serialNumber: { equals: serialNumber, mode: "insensitive" as const },
+    status: { not: SerialStatus.REMOVED },
+    ...(excludeId ? { id: { not: excludeId } } : {}),
+  };
+}
+
+function rethrowLiveSerialConflict(err: unknown, serialNumber: string): never {
+  if (
+    err instanceof Prisma.PrismaClientKnownRequestError &&
+    err.code === "P2002"
+  ) {
+    throw new ConflictException(
+      `Serial number already exists: ${serialNumber}`,
+    );
+  }
+  throw err;
+}
+
 @Injectable()
 export class InventoryService {
   constructor(
@@ -448,16 +473,31 @@ export class InventoryService {
         throw new BadRequestException("serialNumbers must be unique");
       }
 
-      for (const serialNumber of serialNumbers) {
-        const serial = await tx.serialUnit.create({
-          data: {
-            organizationId: input.organizationId,
-            variantId: input.variantId,
-            warehouseId: input.warehouseId,
-            serialNumber,
-            status: SerialStatus.IN_STOCK,
-          },
+      for (const raw of serialNumbers) {
+        const serialNumber = normalizeSerialNumber(raw);
+        const clash = await tx.serialUnit.findFirst({
+          where: liveSerialNumberWhere(input.organizationId, serialNumber),
         });
+        if (clash) {
+          throw new ConflictException(
+            `Serial number already exists: ${serialNumber}`,
+          );
+        }
+
+        let serial: SerialUnit;
+        try {
+          serial = await tx.serialUnit.create({
+            data: {
+              organizationId: input.organizationId,
+              variantId: input.variantId,
+              warehouseId: input.warehouseId,
+              serialNumber,
+              status: SerialStatus.IN_STOCK,
+            },
+          });
+        } catch (err) {
+          rethrowLiveSerialConflict(err, serialNumber);
+        }
         serials.push(serial);
 
         const movement = await tx.stockMovement.create({
@@ -734,11 +774,11 @@ export class InventoryService {
     }
 
     const clash = await this.prisma.serialUnit.findFirst({
-      where: {
-        organizationId: user.organizationId,
-        id: { not: serialId },
-        serialNumber: { equals: serialNumber, mode: "insensitive" },
-      },
+      where: liveSerialNumberWhere(
+        user.organizationId,
+        serialNumber,
+        serialId,
+      ),
     });
     if (clash) {
       throw new ConflictException(
@@ -753,15 +793,7 @@ export class InventoryService {
         data: { serialNumber },
       });
     } catch (err) {
-      if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === "P2002"
-      ) {
-        throw new ConflictException(
-          `Serial number already exists: ${serialNumber}`,
-        );
-      }
-      throw err;
+      rethrowLiveSerialConflict(err, serialNumber);
     }
 
     await this.audit.log({

@@ -394,26 +394,33 @@ async function main() {
 
     if (item.tracksSerial && item.serials?.length) {
       for (const serialNumber of item.serials) {
-        await prisma.serialUnit.upsert({
+        const existingSerial = await prisma.serialUnit.findFirst({
           where: {
-            organizationId_serialNumber: {
-              organizationId: org.id,
-              serialNumber,
-            },
-          },
-          create: {
             organizationId: org.id,
-            variantId: variant.id,
-            warehouseId: warehouse.id,
             serialNumber,
-            status: SerialStatus.IN_STOCK,
-          },
-          update: {
-            variantId: variant.id,
-            warehouseId: warehouse.id,
-            status: SerialStatus.IN_STOCK,
+            status: { not: SerialStatus.REMOVED },
           },
         });
+        if (existingSerial) {
+          await prisma.serialUnit.update({
+            where: { id: existingSerial.id },
+            data: {
+              variantId: variant.id,
+              warehouseId: warehouse.id,
+              status: SerialStatus.IN_STOCK,
+            },
+          });
+        } else {
+          await prisma.serialUnit.create({
+            data: {
+              organizationId: org.id,
+              variantId: variant.id,
+              warehouseId: warehouse.id,
+              serialNumber,
+              status: SerialStatus.IN_STOCK,
+            },
+          });
+        }
       }
     }
   }
