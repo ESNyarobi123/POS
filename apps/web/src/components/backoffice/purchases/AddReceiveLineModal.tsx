@@ -13,6 +13,7 @@ import {
   Textarea,
 } from "@heroui/react";
 import type { ProductListItemDto, ProductListResponse } from "@gulio/contracts";
+import { Field } from "@/components/backoffice/purchases/Field";
 import { ProductThumb } from "@/components/backoffice/ProductThumb";
 import { ApiError, apiFetch } from "@/lib/api";
 import { formatMoney, lineTotal, parseMoneyInput } from "@/lib/money";
@@ -298,7 +299,7 @@ export function AddReceiveLineModal({
                     autoFocus
                     size="sm"
                     type="search"
-                    label="Search catalog"
+                    aria-label="Search catalog"
                     placeholder="Name, SKU, variant…"
                     value={query}
                     onValueChange={setQuery}
@@ -410,38 +411,44 @@ export function AddReceiveLineModal({
                       Quantity & pricing
                     </p>
                     <div className="grid gap-3 sm:grid-cols-3">
-                      <Input
-                        isRequired
-                        autoFocus={!selected.tracksSerial}
-                        size="sm"
-                        label="Quantity"
-                        inputMode="numeric"
-                        value={qty}
-                        onValueChange={setQty}
-                        classNames={inputClassNames}
-                        className="tabular-nums"
-                      />
-                      <Input
-                        isRequired
-                        size="sm"
-                        label="Unit cost / wholesale"
-                        inputMode="decimal"
-                        placeholder="e.g. 288000"
-                        value={unitCost}
-                        onValueChange={setUnitCost}
-                        classNames={inputClassNames}
-                        className="tabular-nums"
-                      />
-                      <Input
-                        size="sm"
-                        label="Retail price"
-                        inputMode="decimal"
-                        placeholder="Prefilled from catalogue"
-                        value={retailPrice}
-                        onValueChange={setRetailPrice}
-                        classNames={inputClassNames}
-                        className="tabular-nums"
-                      />
+                      <Field label="Quantity" required>
+                        <Input
+                          isRequired
+                          autoFocus={!selected.tracksSerial}
+                          size="sm"
+                          aria-label="Quantity"
+                          inputMode="numeric"
+                          value={qty}
+                          onValueChange={setQty}
+                          classNames={inputClassNames}
+                          className="tabular-nums"
+                        />
+                      </Field>
+                      <Field label="Unit cost / wholesale" required>
+                        <Input
+                          isRequired
+                          size="sm"
+                          aria-label="Unit cost / wholesale"
+                          inputMode="decimal"
+                          placeholder="e.g. 288000"
+                          value={unitCost}
+                          onValueChange={setUnitCost}
+                          classNames={inputClassNames}
+                          className="tabular-nums"
+                        />
+                      </Field>
+                      <Field label="Retail price">
+                        <Input
+                          size="sm"
+                          aria-label="Retail price"
+                          inputMode="decimal"
+                          placeholder="Prefilled from catalogue"
+                          value={retailPrice}
+                          onValueChange={setRetailPrice}
+                          classNames={inputClassNames}
+                          className="tabular-nums"
+                        />
+                      </Field>
                     </div>
 
                     <div className="grid gap-2 rounded-xl border border-gulio-border bg-gulio-bg/60 px-3.5 py-3 sm:grid-cols-3">

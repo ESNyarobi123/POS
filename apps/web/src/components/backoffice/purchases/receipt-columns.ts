@@ -28,7 +28,8 @@ export type ReceiptColumnKey =
   | "paid"
   | "pending"
   | "retail"
-  | "status";
+  | "status"
+  | "open";
 
 export type ReceiptColumnAlign = "start" | "center" | "end";
 
@@ -41,6 +42,8 @@ export type ReceiptColumnDef = {
   /** Server sort key when the column can be sorted. */
   sortKey?: GoodsReceiptSort;
   width?: number;
+  /** Structural column (row affordance) — never offered in the column picker. */
+  hidden?: boolean;
 };
 
 export const RECEIPT_COLUMNS: readonly ReceiptColumnDef[] = [
@@ -57,6 +60,7 @@ export const RECEIPT_COLUMNS: readonly ReceiptColumnDef[] = [
   { key: "pending", label: "Pending", align: "end", sortKey: "pendingTotal", width: 116 },
   { key: "retail", label: "Retail", align: "end", width: 116 },
   { key: "status", label: "Status", locked: true, align: "center", width: 104 },
+  { key: "open", label: "", locked: true, align: "end", width: 44, hidden: true },
 ] as const;
 
 export const DEFAULT_RECEIPT_COLUMNS: ReceiptColumnKey[] = RECEIPT_COLUMNS.map(

@@ -7,6 +7,7 @@ import {
   Spinner,
 } from "@heroui/react";
 import { Store } from "lucide-react";
+import { Field } from "./Field";
 
 export type SupplierOption = { id: string; name: string };
 
@@ -99,37 +100,38 @@ export function SupplierCombobox({
   }
 
   return (
-    <Autocomplete
-      size="sm"
-      label="Distributor / supplier"
-      placeholder="Search or type a new distributor…"
-      allowsCustomValue
-      isDisabled={disabled || creating}
-      isLoading={loading}
-      items={items}
-      selectedKey={value}
-      inputValue={inputValue}
-      onInputChange={(next) => {
-        setInputValue(next);
-        onInputValueChange?.(next);
-      }}
-      onSelectionChange={(key) => {
-        void handleSelection(key == null ? null : String(key));
-      }}
-      startContent={
-        creating ? (
-          <Spinner size="sm" color="current" />
-        ) : (
-          <Store size={15} className="text-gulio-muted" aria-hidden />
-        )
-      }
-      description="Type a name and press Enter to create a new distributor."
-      classNames={{
-        ...inputClassNames,
-        popoverContent: "rounded-xl border border-gulio-border",
-      }}
-    >
-      {(item) => <AutocompleteItem key={item.key}>{item.label}</AutocompleteItem>}
-    </Autocomplete>
+    <Field label="Distributor / supplier" hint="Type a name and press Enter to create one.">
+      <Autocomplete
+        size="sm"
+        aria-label="Distributor / supplier"
+        placeholder="Search or type a new distributor…"
+        allowsCustomValue
+        isDisabled={disabled || creating}
+        isLoading={loading}
+        items={items}
+        selectedKey={value}
+        inputValue={inputValue}
+        onInputChange={(next) => {
+          setInputValue(next);
+          onInputValueChange?.(next);
+        }}
+        onSelectionChange={(key) => {
+          void handleSelection(key == null ? null : String(key));
+        }}
+        startContent={
+          creating ? (
+            <Spinner size="sm" color="current" />
+          ) : (
+            <Store size={15} className="text-gulio-muted" aria-hidden />
+          )
+        }
+        classNames={{
+          ...inputClassNames,
+          popoverContent: "rounded-xl border border-gulio-border",
+        }}
+      >
+        {(item) => <AutocompleteItem key={item.key}>{item.label}</AutocompleteItem>}
+      </Autocomplete>
+    </Field>
   );
 }
