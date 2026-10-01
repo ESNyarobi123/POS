@@ -6,6 +6,7 @@ export * from "./auth";
 export * from "./catalog";
 export * from "./customers";
 export * from "./inventory";
+export * from "./reporting";
 export * from "./purchasing";
 export * from "./sales";
 export * from "./payments";

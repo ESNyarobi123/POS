@@ -1,42 +1,29 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import type {
-  ProductListItemDto,
-  ProductListResponse,
-  SaleDto,
-  StockBalanceDto,
-} from "@gulio/contracts";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  buildCategoryMix,
-  buildInsights,
-  buildLowStock,
-  buildPaymentMix,
-  buildRings,
-  buildTopProducts,
-  buildTrend,
-  computeKpis,
-  periodTargetMajor,
-} from "@/components/backoffice/dashboard/analytics";
+  DASHBOARD_NOT_YET_AVAILABLE,
+  type DashboardComparisonDto,
+  type DashboardFinancialsDto,
+  type DashboardRangeKey,
+  type DashboardSummaryResponse,
+} from "@gulio/contracts";
+import { BranchCompareBars } from "@/components/backoffice/dashboard/BranchCompareBars";
 import { CategoryBars } from "@/components/backoffice/dashboard/CategoryBars";
-import { InsightsCards } from "@/components/backoffice/dashboard/InsightsCards";
+import { FinancialSummaryGrid } from "@/components/backoffice/dashboard/FinancialSummaryGrid";
+import { LowStockPanel } from "@/components/backoffice/dashboard/LowStockPanel";
 import { PaymentMixDonut } from "@/components/backoffice/dashboard/PaymentMixDonut";
-import { ProgressRing } from "@/components/backoffice/dashboard/ProgressRing";
-import { SalesTrendChart } from "@/components/backoffice/dashboard/SalesTrendChart";
+import { Phase2Section } from "@/components/backoffice/dashboard/Phase2Section";
+import { QuickActionsStrip } from "@/components/backoffice/dashboard/QuickActionsStrip";
+import { RangeSwitcher } from "@/components/backoffice/dashboard/RangeSwitcher";
+import { RecentSalesPanel } from "@/components/backoffice/dashboard/RecentSalesPanel";
 import { TopProductsList } from "@/components/backoffice/dashboard/TopProductsList";
-import type { DateRangeKey } from "@/components/backoffice/dashboard/types";
-import { ProductThumb } from "@/components/backoffice/ProductThumb";
-import { StatCard } from "@/components/backoffice/StatCard";
+import { TrendChart } from "@/components/backoffice/dashboard/TrendChart";
+import { formatDateTime, toChartNumber } from "@/components/backoffice/dashboard/format";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
-import { formatMoney } from "@/lib/money";
-
-const RANGE_PILLS: Array<{ key: DateRangeKey; label: string }> = [
-  { key: "today", label: "Today" },
-  { key: "7d", label: "7d" },
-  { key: "30d", label: "30d" },
-];
+import { useBranchContext } from "@/lib/branch-context";
 
 function greetingForHour(h: number): string {
   if (h < 12) return "Good morning";
@@ -44,78 +31,56 @@ function greetingForHour(h: number): string {
   return "Good evening";
 }
 
-function IconSales() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.75">
-      <path d="M4 19V5M4 19h16" strokeLinecap="round" />
-      <path d="M8 15l3-4 3 2 4-6" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
+/** Stable zero-shape used only to keep the card grid mounted while loading. */
+const EMPTY_FINANCIAL: DashboardFinancialsDto = {
+  revenue: "0",
+  cogs: "0",
+  grossProfit: "0",
+  grossMarginPct: 0,
+  discountsGiven: "0",
+  taxCollected: "0",
+  refunds: "0",
+  netSales: "0",
+  orders: 0,
+  avgTicket: "0",
+  unitsSold: 0,
+  stockInHandValue: "0",
+  stockUnits: 0,
+  stockRetailValue: "0",
+  cashInHand: "0",
+  openShifts: 0,
+  totalValue: "0",
+  lowStockCount: 0,
+  outOfStockCount: 0,
+  serialTrackedUnits: 0,
+};
 
-function IconOrders() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.75">
-      <path d="M9 5h10M9 12h10M9 19h10" strokeLinecap="round" />
-      <circle cx="5" cy="5" r="1" fill="currentColor" />
-      <circle cx="5" cy="12" r="1" fill="currentColor" />
-      <circle cx="5" cy="19" r="1" fill="currentColor" />
-    </svg>
-  );
-}
-
-function IconTicket() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.75">
-      <rect x="3" y="6" width="18" height="12" rx="2" />
-      <path d="M3 10h18M8 14h4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function IconMargin() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.75">
-      <path d="M12 3v18M7 8l5-3 5 3M7 16l5 3 5-3" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function IconWarn() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.75">
-      <path d="M12 9v4M12 17h.01" strokeLinecap="round" />
-      <path
-        d="M10.3 4.2L2.6 17.5A2 2 0 004.3 20.5h15.4a2 2 0 001.7-3L13.7 4.2a2 2 0 00-3.4 0z"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function IconShift() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.75">
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 7v5l3 2" strokeLinecap="round" />
-    </svg>
-  );
-}
+const EMPTY_COMPARISON: DashboardComparisonDto = {
+  from: "",
+  to: "",
+  revenue: "0",
+  grossProfit: "0",
+  orders: 0,
+  revenueChangePct: null,
+  grossProfitChangePct: null,
+  ordersChangePct: null,
+};
 
 export default function DashboardPage() {
-  const { ready, token, shift, orgContext, online, user } = useAuth();
-  const [range, setRange] = useState<DateRangeKey>("7d");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [products, setProducts] = useState<ProductListItemDto[]>([]);
-  const [sales, setSales] = useState<SaleDto[]>([]);
-  const [balances, setBalances] = useState<StockBalanceDto[]>([]);
+  const { ready, token, shift, online, user } = useAuth();
+  const { selectedBranchId, selectedBranch, isAllBranches, allBranches } =
+    useBranchContext();
 
-  const warehouseId = useMemo(() => {
-    const warehouses = orgContext?.warehouses ?? [];
-    const def = warehouses.find((w) => w.isDefault) ?? warehouses[0];
-    return def?.id ?? null;
-  }, [orgContext]);
+  const [range, setRange] = useState<DashboardRangeKey>("7d");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [data, setData] = useState<DashboardSummaryResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  const customReady =
+    range !== "custom" || (Boolean(customFrom) && Boolean(customTo));
 
   useEffect(() => {
     if (!ready) return;
@@ -123,6 +88,7 @@ export default function DashboardPage() {
       setLoading(false);
       return;
     }
+    if (!customReady) return;
 
     let cancelled = false;
 
@@ -130,35 +96,23 @@ export default function DashboardPage() {
       setLoading(true);
       setError(null);
       try {
-        const [productRes, salesRes] = await Promise.all([
-          apiFetch<ProductListResponse>("/catalog/products?limit=100").catch(
-            () => ({ items: [] as ProductListItemDto[] }),
-          ),
-          apiFetch<SaleDto[]>("/pos/sales?limit=50").catch(() => [] as SaleDto[]),
-        ]);
-
-        if (cancelled) return;
-        setProducts(productRes.items);
-        setSales(salesRes);
-
-        if (warehouseId) {
-          try {
-            const bal = await apiFetch<StockBalanceDto[]>(
-              `/inventory/balances?warehouseId=${encodeURIComponent(warehouseId)}`,
-            );
-            if (!cancelled) setBalances(bal);
-          } catch {
-            if (!cancelled) setBalances([]);
-          }
-        } else {
-          setBalances([]);
+        const params = new URLSearchParams();
+        params.set("range", range);
+        if (selectedBranchId) params.set("branchId", selectedBranchId);
+        if (range === "custom") {
+          params.set("from", customFrom);
+          params.set("to", customTo);
         }
+        const res = await apiFetch<DashboardSummaryResponse>(
+          `/reporting/dashboard?${params.toString()}`,
+        );
+        if (!cancelled) setData(res);
       } catch (e) {
         if (!cancelled) {
           setError(
             e instanceof ApiError
               ? e.message
-              : "Could not load dashboard data",
+              : "Could not load the dashboard metrics",
           );
         }
       } finally {
@@ -169,78 +123,27 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [ready, token, warehouseId]);
+  }, [ready, token, range, selectedBranchId, customFrom, customTo, customReady, reloadKey]);
 
-  const lowStockRows = useMemo(
-    () => buildLowStock(balances, products),
-    [balances, products],
-  );
+  const handleRangeChange = useCallback((key: DashboardRangeKey) => {
+    setRange(key);
+  }, []);
 
-  const kpis = useMemo(
-    () =>
-      computeKpis({
-        sales,
-        range,
-        lowStockCount: balances.length ? lowStockRows.length : null,
-        shiftOpen: Boolean(shift),
-        productCount: products.length || null,
-      }),
-    [sales, range, balances.length, lowStockRows.length, shift, products.length],
-  );
+  const handleApplyCustom = useCallback((from: string, to: string) => {
+    setCustomFrom(from);
+    setCustomTo(to);
+    setRange("custom");
+  }, []);
 
-  const trend = useMemo(() => buildTrend(sales, range), [sales, range]);
-  const paymentMix = useMemo(
-    () => buildPaymentMix(sales, range),
-    [sales, range],
-  );
-  const categoryMix = useMemo(
-    () => buildCategoryMix(sales, products, range),
-    [sales, products, range],
-  );
-  const topProducts = useMemo(
-    () => buildTopProducts(sales, products, range),
-    [sales, products, range],
-  );
-  const rings = useMemo(
-    () =>
-      buildRings({
-        balances,
-        sales,
-        range,
-        salesMajor: kpis.salesMajor,
-        targetMajor: periodTargetMajor(range),
-      }),
-    [balances, sales, range, kpis.salesMajor],
-  );
-  const insights = useMemo(
-    () =>
-      buildInsights({
-        categoryMix: categoryMix.slices,
-        lowStock: lowStockRows,
-        paymentMix: paymentMix.slices,
-        kpis,
-        fromLive: kpis.fromLive,
-      }),
-    [categoryMix.slices, lowStockRows, paymentMix.slices, kpis],
-  );
+  const showSkeleton = loading && !data;
+  const refreshing = loading && Boolean(data);
 
-  const recentSales = useMemo(
-    () =>
-      [...sales]
-        .filter((s) => s.status === "COMPLETED")
-        .sort((a, b) => {
-          const ta = new Date(a.completedAt ?? a.createdAt).getTime();
-          const tb = new Date(b.completedAt ?? b.createdAt).getTime();
-          return tb - ta;
-        })
-        .slice(0, 8),
-    [sales],
-  );
-
-  const branchName =
-    shift?.branchName ??
-    orgContext?.branches.find((b) => b.isActive)?.name ??
-    "your branch";
+  const branchDisplayName = isAllBranches
+    ? "All Branches (Consolidated)"
+    : (selectedBranch?.name ??
+      shift?.branchName ??
+      allBranches.find((b) => b.isActive)?.name ??
+      "Selected Branch");
 
   const firstName = (user?.fullName ?? "Manager").split(/\s+/)[0];
   const greeting = greetingForHour(new Date().getHours());
@@ -251,9 +154,25 @@ export default function DashboardPage() {
     year: "numeric",
   });
 
+  const rangeLabel = data?.range.label ?? "the selected range";
+  const hasSales = (data?.financial.orders ?? 0) > 0;
+  const noDataAtAll =
+    Boolean(data) &&
+    !hasSales &&
+    (data?.financial.stockUnits ?? 0) === 0 &&
+    toChartNumber(data?.financial.stockInHandValue) === 0;
+
+  const phase2Keys = useMemo(
+    () => data?.notYetAvailable ?? [...DASHBOARD_NOT_YET_AVAILABLE],
+    [data],
+  );
+
+  const branchRows = data?.branchBreakdown ?? [];
+  const showBranchCompare = branchRows.length >= 2;
+
   return (
     <div className="pb-8">
-      {/* Header */}
+      {/* Header ------------------------------------------------------- */}
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <p className="text-sm font-medium text-teal-700">
@@ -263,41 +182,47 @@ export default function DashboardPage() {
             {greeting}, {firstName}
           </h1>
           <p className="mt-1 text-sm text-gulio-muted">
-            {branchName} · {todayLabel}
+            {branchDisplayName} · {todayLabel}
             {!online ? " · offline" : ""}
-            {kpis.orders === 0 && products.length === 0
-              ? " · catalog empty — add products to begin"
-              : ""}
           </p>
+          {selectedBranchId ? (
+            <span className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-sky-200 bg-sky-50 px-2.5 py-0.5 text-[11px] font-semibold text-sky-800">
+              <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
+              Viewing: {branchDisplayName}
+            </span>
+          ) : (
+            <span className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-teal-200 bg-teal-50 px-2.5 py-0.5 text-[11px] font-semibold text-teal-800">
+              <span className="h-1.5 w-1.5 rounded-full bg-teal-500" />
+              All Branches — combined view
+            </span>
+          )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div
-            className="inline-flex rounded-xl border border-gulio-border bg-gulio-card p-1 shadow-sm"
-            role="group"
-            aria-label="Date range"
-          >
-            {RANGE_PILLS.map((pill) => {
-              const active = range === pill.key;
-              return (
-                <button
-                  key={pill.key}
-                  type="button"
-                  onClick={() => setRange(pill.key)}
-                  className={`min-h-9 rounded-lg px-3.5 text-sm font-semibold transition ${
-                    active
-                      ? "bg-gulio-primary text-white shadow-sm"
-                      : "text-gulio-muted hover:bg-gulio-bg hover:text-gulio-text"
-                  }`}
-                >
-                  {pill.label}
-                </button>
-              );
-            })}
-          </div>
+        <div className="flex flex-col items-stretch gap-2 sm:items-end">
+          <RangeSwitcher
+            value={range}
+            onChange={handleRangeChange}
+            customFrom={customFrom}
+            customTo={customTo}
+            onApplyCustom={handleApplyCustom}
+            busy={refreshing}
+          />
+          <p className="text-xs text-gulio-muted">
+            <span className="font-semibold uppercase tracking-wide">
+              Financial range
+            </span>
+            {" · "}
+            {customReady ? rangeLabel : "choose from & to, then apply"}
+            {refreshing ? (
+              <span className="ml-2 inline-flex items-center gap-1 text-teal-700">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal-500" />
+                updating…
+              </span>
+            ) : null}
+          </p>
           <Link
             href="/pos"
-            className="inline-flex min-h-touch items-center rounded-xl bg-gulio-primary px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-gulio-primary-hover"
+            className="inline-flex min-h-10 items-center justify-center rounded-xl bg-gulio-primary px-4 text-sm font-semibold text-white shadow-sm hover:bg-gulio-primary-hover sm:w-auto"
           >
             Open POS
           </Link>
@@ -305,263 +230,102 @@ export default function DashboardPage() {
       </div>
 
       {error ? (
-        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          {error}
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={() => setReloadKey((k) => k + 1)}
+            className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 transition hover:bg-amber-100"
+          >
+            Try again
+          </button>
         </div>
       ) : null}
 
-      {/* KPI row */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-        <StatCard
-          label={range === "today" ? "Sales today" : "Sales"}
-          value={formatMoney(kpis.salesMajor)}
-          hint={
-            kpis.orders > 0 ? "Completed checkouts" : "No completed sales yet"
-          }
-          accent="teal"
-          icon={<IconSales />}
-          loading={loading && Boolean(token)}
-        />
-        <StatCard
-          label="Orders"
-          value={String(kpis.orders)}
-          hint="Completed transactions"
-          accent="indigo"
-          icon={<IconOrders />}
-          loading={loading && Boolean(token)}
-        />
-        <StatCard
-          label="Avg ticket"
-          value={formatMoney(kpis.avgTicketMajor)}
-          hint="Incl. tax"
-          accent="purple"
-          icon={<IconTicket />}
-          loading={loading && Boolean(token)}
-        />
-        <StatCard
-          label="Gross margin"
-          value={`${kpis.marginPct}%`}
-          hint="Estimated · cost data pending"
-          accent="emerald"
-          icon={<IconMargin />}
-          loading={loading && Boolean(token)}
-        />
-        <StatCard
-          label="Low stock"
-          value={String(kpis.lowStock)}
-          hint="≤ 5 units available"
-          accent="amber"
-          icon={<IconWarn />}
-          loading={loading && Boolean(token)}
-        />
-        <StatCard
-          label="Open shift"
-          value={kpis.openShift ? "Open" : "None"}
-          hint={
-            shift
-              ? `${shift.registerName} · ${shift.branchName}`
-              : "Open a shift from POS"
-          }
-          accent={kpis.openShift ? "emerald" : "slate"}
-          icon={<IconShift />}
-          loading={!ready}
-        />
-      </div>
+      {noDataAtAll && !error ? (
+        <div className="mb-6 rounded-xl border border-teal-200 bg-teal-50/60 px-4 py-3 text-sm text-teal-900">
+          <p className="font-semibold">Your dashboard is ready to fill up</p>
+          <p className="mt-0.5 text-teal-800">
+            Add products and complete your first sale — revenue, profit and stock
+            analytics will appear here automatically.
+          </p>
+        </div>
+      ) : null}
 
-      {/* Insights */}
-      <div className="mt-6">
-        <InsightsCards cards={insights} />
-      </div>
+      {/* Financial summary — hero ------------------------------------- */}
+      <section className="mb-6" aria-label="Financial summary">
+        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold tracking-tight text-gulio-text">
+              Financial summary
+            </h2>
+            <p className="mt-0.5 text-sm text-gulio-muted">
+              Sales, profit, stock and cash — {rangeLabel}
+            </p>
+          </div>
+          {data ? (
+            <p className="text-xs text-gulio-muted">
+              Updated {formatDateTime(data.generatedAt)}
+              {data.branchId ? "" : " · all branches"}
+            </p>
+          ) : null}
+        </div>
+        <FinancialSummaryGrid
+          financial={data?.financial ?? EMPTY_FINANCIAL}
+          comparison={data?.comparison ?? EMPTY_COMPARISON}
+          rangeLabel={rangeLabel}
+          loading={showSkeleton}
+        />
+      </section>
 
-      {/* Charts row */}
-      <div className="mt-6 grid gap-4 xl:grid-cols-5">
+      {/* Trend + payment mix ------------------------------------------ */}
+      <div className="mb-4 grid gap-4 xl:grid-cols-5">
         <div className="xl:col-span-3">
-          <SalesTrendChart points={trend.points} fromLive={trend.fromLive} />
+          <TrendChart
+            points={data?.trend ?? []}
+            bucket={data?.range.bucket ?? "day"}
+            rangeLabel={rangeLabel}
+            revenue={data?.financial.revenue ?? "0"}
+            grossProfit={data?.financial.grossProfit ?? "0"}
+            revenueChangePct={data?.comparison.revenueChangePct ?? null}
+            loading={showSkeleton}
+          />
         </div>
         <div className="xl:col-span-2">
           <PaymentMixDonut
-            slices={paymentMix.slices}
-            asMoney={paymentMix.fromLive}
-            fromLive={paymentMix.fromLive}
+            slices={data?.paymentMix ?? []}
+            loading={showSkeleton}
           />
         </div>
       </div>
 
-      {/* Rings + category */}
-      <div className="mt-4 grid gap-4 lg:grid-cols-5">
-        <section className="rounded-xl border border-gulio-border bg-gulio-card p-5 shadow-sm lg:col-span-3">
-          <div className="mb-5">
-            <h2 className="font-semibold text-gulio-text">Health rings</h2>
-            <p className="mt-0.5 text-xs text-gulio-muted">
-              Stock · target · IMEI / serial share
-            </p>
-          </div>
-          <div className="flex flex-wrap items-start justify-around gap-6">
-            {rings.map((r) => (
-              <ProgressRing
-                key={r.label}
-                pct={r.pct}
-                label={r.label}
-                hint={r.hint}
-                color={r.color}
-              />
-            ))}
-          </div>
-        </section>
-        <div className="lg:col-span-2">
-          <CategoryBars
-            slices={categoryMix.slices}
-            fromLive={categoryMix.fromLive}
-          />
-        </div>
+      {/* Branch comparison + category mix ----------------------------- */}
+      <div
+        className={`mb-4 grid gap-4 ${showBranchCompare ? "lg:grid-cols-2" : ""}`}
+      >
+        {showBranchCompare ? (
+          <BranchCompareBars rows={branchRows} loading={showSkeleton} />
+        ) : null}
+        <CategoryBars slices={data?.categoryMix ?? []} loading={showSkeleton} />
       </div>
 
-      {/* Lists */}
-      <div className="mt-4 grid gap-4 xl:grid-cols-3">
-        <TopProductsList
-          rows={topProducts.rows}
-          fromLive={topProducts.fromLive}
+      {/* Operational panels ------------------------------------------- */}
+      <div className="mb-4 grid gap-4 xl:grid-cols-3">
+        <TopProductsList rows={data?.topProducts ?? []} loading={showSkeleton} />
+        <RecentSalesPanel
+          sales={data?.recentSales ?? []}
+          loading={showSkeleton}
         />
-
-        <section className="rounded-xl border border-gulio-border bg-gulio-card p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between gap-2">
-            <div>
-              <h2 className="font-semibold text-gulio-text">Recent sales</h2>
-              <p className="mt-0.5 text-xs text-gulio-muted">
-                GET /pos/sales · last 50
-              </p>
-            </div>
-            <Link
-              href="/transactions"
-              className="text-sm font-medium text-gulio-primary hover:underline"
-            >
-              Transactions
-            </Link>
-          </div>
-          {loading && token ? (
-            <div className="space-y-3">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <div
-                  key={i}
-                  className="h-12 animate-pulse rounded-lg bg-gulio-bg"
-                />
-              ))}
-            </div>
-          ) : recentSales.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-gulio-border bg-gulio-bg/40 px-4 py-8 text-center">
-              <p className="text-sm font-medium text-gulio-text">No sales yet</p>
-              <p className="mt-1 text-xs text-gulio-muted">
-                Completed checkouts appear here. KPIs stay at zero until you sell.
-              </p>
-              <Link
-                href="/pos"
-                className="mt-4 inline-flex rounded-xl bg-gulio-primary px-4 py-2.5 text-sm font-semibold text-white hover:bg-gulio-primary-hover"
-              >
-                Go to POS
-              </Link>
-            </div>
-          ) : (
-            <ul className="divide-y divide-gulio-border">
-              {recentSales.map((sale) => (
-                <li
-                  key={sale.id}
-                  className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate font-medium text-gulio-text">
-                      {sale.receiptNumber}
-                    </p>
-                    <p className="text-xs text-gulio-muted">
-                      {sale.completedAt
-                        ? new Date(sale.completedAt).toLocaleString("en-TZ", {
-                            dateStyle: "medium",
-                            timeStyle: "short",
-                          })
-                        : sale.status}
-                      {sale.payments?.[0]
-                        ? ` · ${sale.payments[0].method === "MOBILE_MONEY_MANUAL" ? "MM" : sale.payments[0].method}`
-                        : ""}
-                      {sale.items.some((i) => i.negotiated)
-                        ? " · Negotiated"
-                        : ""}
-                    </p>
-                  </div>
-                  <p className="shrink-0 text-sm font-semibold tabular-nums text-emerald-700">
-                    {formatMoney(sale.grandTotal)}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        <section className="rounded-xl border border-gulio-border bg-gulio-card p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between gap-2">
-            <div>
-              <h2 className="font-semibold text-gulio-text">Low stock alerts</h2>
-              <p className="mt-0.5 text-xs text-gulio-muted">
-                Inventory balances · ≤ 5 available
-              </p>
-            </div>
-            <Link
-              href="/inventory"
-              className="text-sm font-medium text-gulio-primary hover:underline"
-            >
-              Inventory
-            </Link>
-          </div>
-          <ul className="divide-y divide-gulio-border">
-            {lowStockRows.map((row) => (
-              <li
-                key={row.id}
-                className="flex items-center gap-3 py-3 first:pt-0 last:pb-0"
-              >
-                <ProductThumb imageUrl={row.imageUrl} name={row.name} />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-gulio-text">
-                    {row.name}
-                  </p>
-                  <p className="truncate text-xs text-gulio-muted">
-                    {row.sku ?? "—"}
-                    {row.tracksSerial ? " · IMEI" : ""}
-                  </p>
-                </div>
-                <span
-                  className={`shrink-0 rounded-lg px-2 py-1 text-xs font-bold tabular-nums ${
-                    row.available <= 2
-                      ? "bg-red-50 text-red-700"
-                      : "bg-amber-50 text-amber-800"
-                  }`}
-                >
-                  {row.available} left
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
+        <LowStockPanel rows={data?.lowStock ?? []} loading={showSkeleton} />
       </div>
 
-      {/* Quick actions strip */}
-      <section className="mt-4 rounded-xl border border-gulio-border bg-gulio-card p-4 shadow-sm">
-        <div className="flex flex-wrap gap-2">
-          {[
-            { href: "/products/new", label: "Add product" },
-            { href: "/purchases/receive", label: "Receive stock" },
-            { href: "/labels", label: "Print labels" },
-            { href: "/inventory", label: "Inventory" },
-            { href: "/returns", label: "Returns" },
-            { href: "/reports", label: "Reports" },
-          ].map((a) => (
-            <Link
-              key={a.href}
-              href={a.href}
-              className="inline-flex min-h-9 items-center rounded-lg border border-gulio-border bg-gulio-bg/60 px-3.5 text-sm font-medium text-gulio-text transition hover:border-teal-200 hover:bg-teal-50/60"
-            >
-              {a.label}
-            </Link>
-          ))}
-        </div>
-      </section>
+      {/* Phase 2 placeholders ----------------------------------------- */}
+      <div className="mb-4">
+        <Phase2Section keys={phase2Keys} />
+      </div>
+
+      {/* Quick actions ------------------------------------------------ */}
+      <QuickActionsStrip />
     </div>
   );
 }
