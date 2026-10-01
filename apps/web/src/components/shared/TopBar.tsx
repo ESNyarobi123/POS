@@ -3,6 +3,7 @@
 import Link from "next/link";
 import type { ReactNode, SVGProps } from "react";
 import { BrandMark } from "@/components/shared/BrandMark";
+import { BranchSwitcher } from "@/components/shared/BranchSwitcher";
 import { useAuth } from "@/lib/auth-store";
 import { API_BASE_URL } from "@/lib/api";
 import { PermissionCode, usePermissions } from "@/lib/permissions";
@@ -131,19 +132,8 @@ export function TopBar({
           href={shift ? "/pos" : "/shift/open"}
           title="Go to POS register"
         />
-        <HeaderButton
-          href={settingsHref}
-          title={
-            can(PermissionCode.SETTINGS_MANAGE)
-              ? "Branch & organization settings"
-              : "Branch context"
-          }
-          tone="branch"
-          eyebrow="Branch"
-          label={branchName}
-          icon={<IconBuilding className="h-3.5 w-3.5" />}
-          className="shrink-0"
-        />
+        {/* Branch switcher dropdown */}
+        <BranchSwitcher />
         <HeaderButton
           href={settingsHref}
           title={

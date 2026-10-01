@@ -23,6 +23,7 @@ import { EmployeeDeleteModal } from "@/components/backoffice/employees/EmployeeD
 import { EmployeeFormModal } from "@/components/backoffice/employees/EmployeeFormModal";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
+import { useBranchContext } from "@/lib/branch-context";
 import {
   COMMON_POS_PERMISSIONS,
   PermissionCode,
@@ -40,9 +41,11 @@ export default function EmployeesPage() {
 }
 
 function EmployeesPageInner() {
-  const { ready, token, user: me } = useAuth();
+  const { ready, token, user: me, orgContext } = useAuth();
+  const { selectedBranchId } = useBranchContext();
   const { isOwner } = usePermissions();
   const [users, setUsers] = useState<OrgUserDto[]>([]);
+  const [showAllStaff, setShowAllStaff] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
@@ -54,6 +57,22 @@ function EmployeesPageInner() {
   const [deleteUser, setDeleteUser] = useState<OrgUserDto | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const selectedBranch = useMemo(() => {
+    if (!selectedBranchId) return null;
+    return (orgContext?.branches ?? []).find((b) => b.id === selectedBranchId) ?? null;
+  }, [orgContext, selectedBranchId]);
+
+  const visibleUsers = useMemo(() => {
+    if (!selectedBranchId || showAllStaff) return users;
+    return users.filter(
+      (u) =>
+        u.roles.includes("OWNER") ||
+        !u.branchIds ||
+        u.branchIds.length === 0 ||
+        u.branchIds.includes(selectedBranchId),
+    );
+  }, [users, selectedBranchId, showAllStaff]);
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -193,15 +212,30 @@ function EmployeesPageInner() {
     <div className="flex min-h-[calc(100vh-7.5rem)] flex-col">
       <PageHeader
         title="Employees"
-        subtitle="View, edit, disable, or delete staff accounts"
+        subtitle={
+          selectedBranch
+            ? `Team members & credentials for ${selectedBranch.name} (${selectedBranch.code})`
+            : "Team members, roles, and PIN access across all branches"
+        }
         actions={
-          <button
-            type="button"
-            onClick={openCreate}
-            className="inline-flex min-h-touch items-center rounded-xl bg-gulio-primary px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-gulio-primary-hover"
-          >
-            Add employee
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {selectedBranch ? (
+              <button
+                type="button"
+                onClick={() => setShowAllStaff((prev) => !prev)}
+                className="inline-flex min-h-touch items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+              >
+                {showAllStaff ? `Show ${selectedBranch.name} only` : "Show all organization staff"}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={openCreate}
+              className="inline-flex min-h-touch items-center rounded-xl bg-gulio-primary px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-gulio-primary-hover"
+            >
+              Add employee
+            </button>
+          </div>
         }
       />
 
@@ -218,18 +252,18 @@ function EmployeesPageInner() {
         <div className="min-w-0">
           {loading ? (
             <p className="text-sm text-gulio-muted">Loading employees…</p>
-          ) : users.length === 0 ? (
+          ) : visibleUsers.length === 0 ? (
             <EmptyState
-              title="No employees yet"
-              description="Create a cashier, manager, or owner account to get started."
+              title={selectedBranch && !showAllStaff ? `No employees assigned to ${selectedBranch.name}` : "No employees yet"}
+              description={selectedBranch && !showAllStaff ? "Click 'Show all organization staff' or edit an employee to assign them to this branch." : "Create a cashier, manager, or owner account to get started."}
             />
           ) : (
             <DataTable
               columns={["Employee", "Role", "Status", "Actions"]}
               minWidthClassName="min-w-[720px]"
-              footer={`${users.length} user${users.length === 1 ? "" : "s"}`}
+              footer={`${visibleUsers.length} user${visibleUsers.length === 1 ? "" : "s"}${selectedBranch && !showAllStaff ? ` · ${selectedBranch.name}` : " · all staff"}`}
             >
-              {users.map((u) => {
+              {visibleUsers.map((u) => {
                 const active = u.id === selectedId;
                 const self = me?.id === u.id;
                 const lastOwner = isLastActiveOwner(u);

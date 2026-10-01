@@ -17,8 +17,9 @@ import { ProductThumb } from "@/components/backoffice/ProductThumb";
 import { StatCard } from "@/components/backoffice/StatCard";
 import { AddStockModal } from "@/components/backoffice/inventory/AddStockModal";
 import { InventorySerialsModal } from "@/components/backoffice/inventory/InventorySerialsModal";
-import { ApiError, apiFetch } from "@/lib/api";
+import { ApiError, apiFetch, isUuid } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
+import { useBranchContext } from "@/lib/branch-context";
 import { formatMoney } from "@/lib/money";
 import {
   PermissionCode,
@@ -55,7 +56,12 @@ export default function InventoryPage() {
     can(PermissionCode.STOCK_ADJUST) || isOwner() || isManager();
   const canInspectSerials = isOwner();
 
-  const warehouses = orgContext?.warehouses ?? [];
+  const {
+    selectedBranchId,
+    selectedBranch,
+    targetWarehouses: warehouses,
+  } = useBranchContext();
+
   const [warehouseId, setWarehouseId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -88,7 +94,22 @@ export default function InventoryPage() {
     if (!warehouse) {
       setLoading(false);
       setRows([]);
-      setError("No warehouse in org context — assign a warehouse to continue");
+      setError(
+        selectedBranch
+          ? `No warehouse assigned to branch ${selectedBranch.name} (${selectedBranch.code})`
+          : "No warehouse in org context — assign a warehouse to continue",
+      );
+      return;
+    }
+
+    // Legacy browser-only warehouse ids (`wh-…`) are not server ids — never
+    // send them to the API or the request fails with a UUID error.
+    if (!isUuid(warehouse.id)) {
+      setLoading(false);
+      setRows([]);
+      setError(
+        `“${warehouse.name}” is not a saved server warehouse. Pick another warehouse or re-create it in Settings → Branches & Warehouses.`,
+      );
       return;
     }
 
@@ -195,7 +216,11 @@ export default function InventoryPage() {
     <div className="flex min-h-[calc(100vh-7.5rem)] flex-col">
       <PageHeader
         title="Inventory"
-        subtitle="Live warehouse balances — stock changes only via the ledger"
+        subtitle={
+          selectedBranch
+            ? `Live balances for ${selectedBranch.name} (${selectedBranch.code}) — stock changes only via the ledger`
+            : "Live warehouse balances across all locations — stock changes only via the ledger"
+        }
         actions={
           canAdjust ? (
             <button

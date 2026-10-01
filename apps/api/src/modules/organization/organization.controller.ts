@@ -1,9 +1,24 @@
-import { Body, Controller, Get, Patch, UseGuards } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  UseGuards,
+} from "@nestjs/common";
 import { PermissionCode } from "@gulio/contracts";
 import type {
+  BranchDetailDto,
+  BranchListResponse,
+  CreateBranchRequest,
+  CreateWarehouseRequest,
   OrganizationContextResponse,
   OrganizationSettingsDto,
+  UpdateBranchRequest,
   UpdateOrganizationSettingsRequest,
+  UpdateWarehouseRequest,
 } from "@gulio/contracts";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { Permissions } from "../auth/decorators/permissions.decorator";
@@ -22,6 +37,82 @@ export class OrganizationController {
     @CurrentUser() user: RequestUser,
   ): Promise<OrganizationContextResponse> {
     return this.organizationService.getContext(user);
+  }
+
+  @Get("branches")
+  @UseGuards(PermissionsGuard)
+  @Permissions(
+    PermissionCode.ORG_MANAGE,
+    PermissionCode.SETTINGS_MANAGE,
+    PermissionCode.STOCK_VIEW,
+  )
+  async getBranches(
+    @CurrentUser() user: RequestUser,
+  ): Promise<BranchListResponse> {
+    return this.organizationService.getBranches(user);
+  }
+
+  @Post("branches")
+  @UseGuards(PermissionsGuard)
+  @Permissions(PermissionCode.ORG_MANAGE, PermissionCode.SETTINGS_MANAGE)
+  async createBranch(
+    @CurrentUser() user: RequestUser,
+    @Body() body: CreateBranchRequest,
+  ): Promise<BranchDetailDto> {
+    return this.organizationService.createBranch(user, body);
+  }
+
+  @Patch("branches/:id")
+  @UseGuards(PermissionsGuard)
+  @Permissions(PermissionCode.ORG_MANAGE, PermissionCode.SETTINGS_MANAGE)
+  async updateBranch(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() body: UpdateBranchRequest,
+  ): Promise<BranchDetailDto> {
+    return this.organizationService.updateBranch(user, id, body);
+  }
+
+  @Post("warehouses")
+  @UseGuards(PermissionsGuard)
+  @Permissions(
+    PermissionCode.ORG_MANAGE,
+    PermissionCode.SETTINGS_MANAGE,
+    PermissionCode.STOCK_ADJUST,
+  )
+  async createWarehouse(
+    @CurrentUser() user: RequestUser,
+    @Body() body: CreateWarehouseRequest,
+  ): Promise<{ id: string; branchId: string; name: string; isDefault: boolean }> {
+    return this.organizationService.createWarehouse(user, body);
+  }
+
+  @Patch("warehouses/:id")
+  @UseGuards(PermissionsGuard)
+  @Permissions(
+    PermissionCode.ORG_MANAGE,
+    PermissionCode.SETTINGS_MANAGE,
+    PermissionCode.STOCK_ADJUST,
+  )
+  async updateWarehouse(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() body: UpdateWarehouseRequest,
+  ): Promise<{ id: string; branchId: string; name: string; isDefault: boolean }> {
+    return this.organizationService.updateWarehouse(user, id, body);
+  }
+
+  @Delete("warehouses/:id")
+  @UseGuards(PermissionsGuard)
+  @Permissions(
+    PermissionCode.ORG_MANAGE,
+    PermissionCode.SETTINGS_MANAGE,
+  )
+  async deleteWarehouse(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+  ): Promise<{ success: boolean; message: string }> {
+    return this.organizationService.deleteWarehouse(user, id);
   }
 
   @Get("settings")

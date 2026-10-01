@@ -5,8 +5,10 @@ import type {
   OrganizationSettingsDto,
   UpdateOrganizationSettingsRequest,
 } from "@gulio/contracts";
+import { Building2, CreditCard, ShieldAlert, Sliders, Store } from "lucide-react";
 import { PageHeader } from "@/components/backoffice/PageHeader";
 import { PermissionGate } from "@/components/backoffice/PermissionGate";
+import { BranchesSettingsSection } from "@/components/backoffice/settings/BranchesSettingsSection";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
 import { PermissionCode } from "@/lib/permissions";
@@ -23,6 +25,11 @@ function SettingsPageInner() {
   const { orgContext, user, refreshOrgContext } = useAuth();
   const orgName = orgContext?.organization.name ?? "Gisee Company Ltd";
   const currency = orgContext?.organization.currencyCode ?? "TZS";
+  const branches = orgContext?.branches ?? [];
+
+  const [activeTab, setActiveTab] = useState<
+    "branches" | "general" | "payments" | "policies"
+  >("branches");
 
   const [percent, setPercent] = useState("5");
   const [allowAboveList, setAllowAboveList] = useState(true);
@@ -244,8 +251,69 @@ function SettingsPageInner() {
         </div>
       ) : null}
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        <form className="lg:col-span-2" onSubmit={(e) => void onSaveSelcom(e)}>
+      {/* Top Menu Tabs */}
+      <div className="mb-6 flex overflow-x-auto border-b border-gulio-border">
+        <button
+          type="button"
+          onClick={() => setActiveTab("branches")}
+          className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold transition whitespace-nowrap ${
+            activeTab === "branches"
+              ? "border-teal-600 text-teal-700 bg-teal-50/40"
+              : "border-transparent text-gulio-muted hover:border-slate-300 hover:text-slate-800"
+          }`}
+        >
+          <Building2 className="h-4 w-4" />
+          <span>Branches & Warehouses</span>
+          <span className="rounded-full bg-teal-100 px-2 py-0.5 text-xs font-bold text-teal-800">
+            {branches.length}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab("general")}
+          className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold transition whitespace-nowrap ${
+            activeTab === "general"
+              ? "border-teal-600 text-teal-700 bg-teal-50/40"
+              : "border-transparent text-gulio-muted hover:border-slate-300 hover:text-slate-800"
+          }`}
+        >
+          <Sliders className="h-4 w-4" />
+          <span>General & Tax</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab("payments")}
+          className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold transition whitespace-nowrap ${
+            activeTab === "payments"
+              ? "border-teal-600 text-teal-700 bg-teal-50/40"
+              : "border-transparent text-gulio-muted hover:border-slate-300 hover:text-slate-800"
+          }`}
+        >
+          <CreditCard className="h-4 w-4" />
+          <span>Payments & APIs</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab("policies")}
+          className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold transition whitespace-nowrap ${
+            activeTab === "policies"
+              ? "border-teal-600 text-teal-700 bg-teal-50/40"
+              : "border-transparent text-gulio-muted hover:border-slate-300 hover:text-slate-800"
+          }`}
+        >
+          <ShieldAlert className="h-4 w-4" />
+          <span>Pricing & Policies</span>
+        </button>
+      </div>
+
+      {activeTab === "branches" ? (
+        <BranchesSettingsSection />
+      ) : activeTab === "payments" ? (
+        <div className="grid gap-5 lg:grid-cols-2">
+          <form className="lg:col-span-2" onSubmit={(e) => void onSaveSelcom(e)}>
           <SettingsCard
             title="Selcom mobile money"
             description="API details from Selcom. After Save, POS Mobile sends a push to the customer number."
@@ -386,93 +454,98 @@ function SettingsPageInner() {
             </div>
           </SettingsCard>
         </form>
-
-        <SettingsCard
-          title="Organization"
-          description="Legal identity shown on receipts and fiscal docs"
-        >
-          <Field label="Legal name" defaultValue={orgName} />
-          <Field label="TIN" defaultValue="123-456-789" />
-          <Field label="Default currency" defaultValue={currency} />
-          <Field
-            label="Timezone"
-            defaultValue={
-              orgContext?.organization.timezone ?? "Africa/Dar_es_Salaam"
-            }
-          />
-        </SettingsCard>
-
-        <SettingsCard
-          title="Tax & receipts"
-          description="VAT and footer copy for printed / digital receipts"
-        >
-          <Field label="VAT rate" defaultValue="18%" />
-          <Field label="Receipt footer" defaultValue="Asante! Karibu tena." />
-          <Toggle
-            label="Fiscal provider enabled"
-            hint="MockFiscalProvider — sales can stay FISCAL_PENDING"
-            defaultChecked
-          />
-        </SettingsCard>
-
-        <form onSubmit={(e) => void onSave(e)}>
+        </div>
+      ) : activeTab === "general" ? (
+        <div className="grid gap-5 lg:grid-cols-2">
           <SettingsCard
-            title="Price negotiation"
-            description="Cashiers follow this policy. Catalog sell price is never changed."
+            title="Organization"
+            description="Legal identity shown on receipts and fiscal docs"
           >
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-gulio-muted">
-                Cashier max % below list without PIN
-              </label>
-              <input
-                type="number"
-                min={0}
-                max={100}
-                step={1}
-                value={percent}
-                disabled={loading || saving}
-                onChange={(e) => setPercent(e.target.value)}
-                className="w-full rounded-xl border border-gulio-border px-3.5 py-2.5 text-sm tabular-nums outline-none ring-gulio-primary focus:ring-2"
-              />
-              <p className="mt-1.5 text-xs text-gulio-muted">
-                Example: 5% on TZS 10,000 → cashier may charge TZS 9,500 without a
-                manager.
-              </p>
-            </div>
-            <ToggleControlled
-              label="Allow price above list"
-              hint="Raises revenue — always audited. No PIN required."
-              checked={allowAboveList}
-              onChange={setAllowAboveList}
-              disabled={loading || saving}
-            />
-            <ToggleControlled
-              label="Block below cost (PIN to proceed)"
-              hint="Cashier is stopped. Owner/Manager PIN can still complete the sale."
-              checked={blockBelowCost}
-              onChange={setBlockBelowCost}
-              disabled={loading || saving}
+            <Field label="Legal name" defaultValue={orgName} />
+            <Field label="TIN" defaultValue="123-456-789" />
+            <Field label="Default currency" defaultValue={currency} />
+            <Field
+              label="Timezone"
+              defaultValue={
+                orgContext?.organization.timezone ?? "Africa/Dar_es_Salaam"
+              }
             />
           </SettingsCard>
-        </form>
 
-        <SettingsCard
-          title="Session & security"
-          description="Signed-in operator context"
-        >
-          <ReadonlyRow label="Signed in as" value={user?.fullName ?? "—"} />
-          <ReadonlyRow label="Email" value={user?.email ?? "—"} />
-          <ReadonlyRow
-            label="Roles"
-            value={user?.roles?.join(", ") || "—"}
-          />
-          <Toggle
-            label="Require manager PIN for voids"
-            hint="Audited privileged action"
-            defaultChecked
-          />
-        </SettingsCard>
-      </div>
+          <SettingsCard
+            title="Tax & receipts"
+            description="VAT and footer copy for printed / digital receipts"
+          >
+            <Field label="VAT rate" defaultValue="18%" />
+            <Field label="Receipt footer" defaultValue="Asante! Karibu tena." />
+            <Toggle
+              label="Fiscal provider enabled"
+              hint="MockFiscalProvider — sales can stay FISCAL_PENDING"
+              defaultChecked
+            />
+          </SettingsCard>
+        </div>
+      ) : (
+        <div className="grid gap-5 lg:grid-cols-2">
+          <form onSubmit={(e) => void onSave(e)}>
+            <SettingsCard
+              title="Price negotiation"
+              description="Cashiers follow this policy. Catalog sell price is never changed."
+            >
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-gulio-muted">
+                  Cashier max % below list without PIN
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={percent}
+                  disabled={loading || saving}
+                  onChange={(e) => setPercent(e.target.value)}
+                  className="w-full rounded-xl border border-gulio-border px-3.5 py-2.5 text-sm tabular-nums outline-none ring-gulio-primary focus:ring-2"
+                />
+                <p className="mt-1.5 text-xs text-gulio-muted">
+                  Example: 5% on TZS 10,000 → cashier may charge TZS 9,500 without a
+                  manager.
+                </p>
+              </div>
+              <ToggleControlled
+                label="Allow price above list"
+                hint="Raises revenue — always audited. No PIN required."
+                checked={allowAboveList}
+                onChange={setAllowAboveList}
+                disabled={loading || saving}
+              />
+              <ToggleControlled
+                label="Block below cost (PIN to proceed)"
+                hint="Cashier is stopped. Owner/Manager PIN can still complete the sale."
+                checked={blockBelowCost}
+                onChange={setBlockBelowCost}
+                disabled={loading || saving}
+              />
+            </SettingsCard>
+          </form>
+
+          <SettingsCard
+            title="Session & security"
+            description="Signed-in operator context"
+          >
+            <ReadonlyRow label="Signed in as" value={user?.fullName ?? "—"} />
+            <ReadonlyRow label="Email" value={user?.email ?? "—"} />
+            <ReadonlyRow
+              label="Roles"
+              value={user?.roles?.join(", ") || "—"}
+            />
+            <Toggle
+              label="Require manager PIN for voids"
+              hint="Audited privileged action"
+              defaultChecked
+            />
+          </SettingsCard>
+        </div>
+      )}
     </div>
   );
 }

@@ -28,6 +28,17 @@ export class ApiError extends Error {
   }
 }
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Server ids are UUIDs. Legacy browser-only (localStorage) branches/warehouses
+ * used ids like `wh-1759…`, which the API rejects — never send those.
+ */
+export function isUuid(value: string | null | undefined): boolean {
+  return typeof value === "string" && UUID_RE.test(value);
+}
+
 function readToken(): string | null {
   if (typeof window === "undefined") return null;
   return localStorage.getItem(TOKEN_STORAGE_KEY);

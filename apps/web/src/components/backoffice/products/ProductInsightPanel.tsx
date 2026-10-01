@@ -24,12 +24,23 @@ import {
 } from "./product-insights";
 import type { SaleDto } from "@gulio/contracts";
 
+export type BranchStockEntry = {
+  branchId: string;
+  branchName: string;
+  branchCode: string;
+  stock: number;
+  isCurrent: boolean;
+};
+
 type Props = {
   rows: CatalogRow[];
   selected: CatalogRow | null;
   balances: Map<string, number>;
   sales: SaleDto[];
   onClearSelection?: () => void;
+  branchBreakdown?: BranchStockEntry[];
+  selectedBranchName?: string | null;
+  isAllBranches?: boolean;
 };
 
 async function copyText(value: string): Promise<boolean> {
@@ -47,6 +58,9 @@ export function ProductInsightPanel({
   balances,
   sales,
   onClearSelection,
+  branchBreakdown,
+  selectedBranchName,
+  isAllBranches,
 }: Props) {
   const [copied, setCopied] = useState<string | null>(null);
 
@@ -216,6 +230,72 @@ export function ProductInsightPanel({
         className="space-y-4 opacity-0 [animation:productDockIn_280ms_ease-out_forwards]"
       >
         <ProductHeroCard row={selected} />
+
+        {/* Branch Inventory Breakdown */}
+        {branchBreakdown && branchBreakdown.length > 0 && (
+          <div className="rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-xs">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700">
+                Stock by Location
+              </span>
+              <span className="text-[11px] font-semibold text-teal-700">
+                {branchBreakdown.reduce((acc, b) => acc + b.stock, 0)} Total Units
+              </span>
+            </div>
+
+            <div className="mt-2.5 space-y-1.5">
+              {branchBreakdown.map((b) => (
+                <div
+                  key={b.branchId}
+                  className={`flex items-center justify-between rounded-xl px-2.5 py-1.5 text-xs transition ${
+                    b.isCurrent
+                      ? "bg-teal-50/80 border border-teal-200/70 font-semibold"
+                      : "bg-slate-50 border border-slate-100"
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span
+                      className={`h-2 w-2 rounded-full shrink-0 ${
+                        b.stock > 0 ? "bg-emerald-500" : "bg-slate-300"
+                      }`}
+                    />
+                    <span className="truncate text-slate-800">
+                      {b.branchName}
+                    </span>
+                    <span className="font-mono text-[10px] text-slate-400">
+                      ({b.branchCode})
+                    </span>
+                    {b.isCurrent && (
+                      <span className="rounded bg-teal-200/60 px-1 text-[9px] font-bold text-teal-900">
+                        Current
+                      </span>
+                    )}
+                  </div>
+
+                  <span
+                    className={`tabular-nums font-bold ${
+                      b.stock > 0 ? "text-slate-900" : "text-rose-600"
+                    }`}
+                  >
+                    {b.stock} units
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {selectedBranchName && !isAllBranches && (
+              <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between">
+                <span className="text-[11px] text-slate-500">
+                  Stock at {selectedBranchName}:
+                </span>
+                <span className="text-xs font-bold text-slate-900">
+                  {branchBreakdown.find((b) => b.isCurrent)?.stock ?? 0} units
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
         <ProductInsightChips chips={chips} />
         <ProductQuickStats
           stock={stock}

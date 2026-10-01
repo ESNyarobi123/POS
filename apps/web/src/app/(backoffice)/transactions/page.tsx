@@ -9,6 +9,7 @@ import { TransactionDetailPanel } from "@/components/backoffice/transactions/Tra
 import { TransactionLineThumb } from "@/components/backoffice/transactions/TransactionLineThumb";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
+import { useBranchContext } from "@/lib/branch-context";
 import { formatMoney } from "@/lib/money";
 import { PermissionCode } from "@/lib/permissions";
 import {
@@ -33,7 +34,8 @@ export default function TransactionsPage() {
 }
 
 function TransactionsPageInner() {
-  const { ready, token } = useAuth();
+  const { ready, token, orgContext } = useAuth();
+  const { selectedBranchId } = useBranchContext();
   const [sales, setSales] = useState<SaleDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -44,6 +46,11 @@ function TransactionsPageInner() {
   const [method, setMethod] = useState("");
   const [customer, setCustomer] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const selectedBranch = useMemo(() => {
+    if (!selectedBranchId) return null;
+    return (orgContext?.branches ?? []).find((b) => b.id === selectedBranchId) ?? null;
+  }, [orgContext, selectedBranchId]);
 
   useEffect(() => {
     if (!ready || !token) return;
@@ -73,38 +80,44 @@ function TransactionsPageInner() {
     };
   }, [ready, token, range]);
 
+  // Filter sales to selected branch (or all branches if null)
+  const branchSales = useMemo(() => {
+    if (!selectedBranchId) return sales;
+    return sales.filter((s) => !s.branchId || s.branchId === selectedBranchId);
+  }, [sales, selectedBranchId]);
+
   const cashiers = useMemo(() => {
     const map = new Map<string, string>();
-    for (const s of sales) {
+    for (const s of branchSales) {
       if (s.cashierUserId && s.cashierName) {
         map.set(s.cashierUserId, s.cashierName);
       }
     }
     return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-  }, [sales]);
+  }, [branchSales]);
 
   const channels = useMemo(() => {
     const set = new Set<string>();
-    for (const s of sales) {
+    for (const s of branchSales) {
       const name = saleChannel(s);
       if (name && name !== "—") set.add(name);
     }
     return [...set].sort();
-  }, [sales]);
+  }, [branchSales]);
 
   const customers = useMemo(() => {
     const map = new Map<string, string>();
-    for (const s of sales) {
+    for (const s of branchSales) {
       if (s.customerId && s.customerName) {
         map.set(s.customerId, s.customerName);
       }
     }
     return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-  }, [sales]);
+  }, [branchSales]);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return sales.filter((s) => {
+    return branchSales.filter((s) => {
       if (cashier && s.cashierUserId !== cashier) return false;
       if (customer && s.customerId !== customer) return false;
       if (method && !s.payments.some((p) => p.method === method)) return false;
@@ -126,7 +139,7 @@ function TransactionsPageInner() {
         .toLowerCase();
       return hay.includes(needle);
     });
-  }, [sales, q, cashier, channel, method, customer]);
+  }, [branchSales, q, cashier, channel, method, customer]);
 
   const selected = filtered.find((s) => s.id === selectedId) ?? null;
 
@@ -141,7 +154,11 @@ function TransactionsPageInner() {
     <div>
       <PageHeader
         title="Transactions"
-        subtitle="Live POS sales with cashier, channel, payment method, devices, and negotiated prices"
+        subtitle={
+          selectedBranch
+            ? `Register journal for ${selectedBranch.name} (${selectedBranch.code}) · payments & fiscal events`
+            : "Register journal across all locations · payments & fiscal events"
+        }
       />
 
       {error ? (

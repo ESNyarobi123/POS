@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { AuthProvider } from "@/lib/auth-store";
+import { BranchContextProvider } from "@/lib/branch-context";
 import { Providers } from "./providers";
 import "./globals.css";
 
@@ -32,7 +33,9 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${inter.variable} font-sans antialiased`}>
         <AuthProvider>
-          <Providers>{children}</Providers>
+          <BranchContextProvider>
+            <Providers>{children}</Providers>
+          </BranchContextProvider>
         </AuthProvider>
       </body>
     </html>

@@ -772,12 +772,30 @@ export class InventoryService {
     return result;
   }
 
+  /**
+   * Guards read endpoints so an unknown / foreign warehouse id returns 404
+   * instead of reaching Prisma and blowing up as a 500.
+   */
+  private async assertWarehouseInOrg(
+    organizationId: string,
+    warehouseId: string,
+  ): Promise<void> {
+    const warehouse = await this.prisma.warehouse.findFirst({
+      where: { id: warehouseId, organizationId },
+      select: { id: true },
+    });
+    if (!warehouse) {
+      throw new NotFoundException("Warehouse not found");
+    }
+  }
+
   async listAvailableSerials(
     organizationId: string,
     variantId: string,
     warehouseId: string,
     status: SerialStatus = SerialStatus.IN_STOCK,
   ): Promise<SerialUnitDto[]> {
+    await this.assertWarehouseInOrg(organizationId, warehouseId);
     const rows = await this.prisma.serialUnit.findMany({
       where: { organizationId, variantId, warehouseId, status },
       orderBy: { serialNumber: "asc" },
@@ -801,6 +819,7 @@ export class InventoryService {
     organizationId: string,
     warehouseId: string,
   ): Promise<StockBalanceDto[]> {
+    await this.assertWarehouseInOrg(organizationId, warehouseId);
     const rows = await this.prisma.stockBalance.findMany({
       where: { organizationId, warehouseId },
       orderBy: { variantId: "asc" },

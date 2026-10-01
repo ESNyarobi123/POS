@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/backoffice/PageHeader";
 import { StatCard } from "@/components/backoffice/StatCard";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
+import { useBranchContext } from "@/lib/branch-context";
 import { formatMoney } from "@/lib/money";
 import { reportKpis } from "@/lib/mock-data";
 import { TransactionLineThumb } from "@/components/backoffice/transactions/TransactionLineThumb";
@@ -42,13 +43,19 @@ function isSameLocalDay(iso: string | null | undefined): boolean {
 }
 
 export default function ReportsPage() {
-  const { ready, token } = useAuth();
+  const { ready, token, orgContext } = useAuth();
+  const { selectedBranchId } = useBranchContext();
   const [loading, setLoading] = useState(true);
   const [todaySales, setTodaySales] = useState<SaleDto[]>([]);
   const [recentSales, setRecentSales] = useState<SaleDto[]>([]);
   const [liveKpis, setLiveKpis] = useState<
     Array<{ label: string; value: string; hint: string }> | null
   >(null);
+
+  const selectedBranch = useMemo(() => {
+    if (!selectedBranchId) return null;
+    return (orgContext?.branches ?? []).find((b) => b.id === selectedBranchId) ?? null;
+  }, [orgContext, selectedBranchId]);
 
   useEffect(() => {
     if (!ready || !token) return;
@@ -62,7 +69,10 @@ export default function ReportsPage() {
         if (from) qs.set("from", from.toISOString());
         const sales = await apiFetch<SaleDto[]>(`/pos/sales?${qs.toString()}`);
         if (cancelled) return;
-        const completed = sales.filter((s) => s.status === "COMPLETED");
+        const branchSales = selectedBranchId
+          ? sales.filter((s) => !s.branchId || s.branchId === selectedBranchId)
+          : sales;
+        const completed = branchSales.filter((s) => s.status === "COMPLETED");
         const today = completed.filter((s) =>
           isSameLocalDay(s.completedAt ?? s.createdAt),
         );
@@ -111,7 +121,7 @@ export default function ReportsPage() {
     return () => {
       cancelled = true;
     };
-  }, [ready, token]);
+  }, [ready, token, selectedBranchId]);
 
   const kpis = useMemo(() => {
     if (liveKpis) return liveKpis;
@@ -124,7 +134,11 @@ export default function ReportsPage() {
     <div>
       <PageHeader
         title="Reports"
-        subtitle="Today sales with live transaction breakdown · Transaction menu has full filters"
+        subtitle={
+          selectedBranch
+            ? `Daily breakdown and metrics for ${selectedBranch.name} (${selectedBranch.code})`
+            : "Consolidated performance metrics across all store branches"
+        }
         actions={
           <Link
             href="/transactions"

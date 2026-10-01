@@ -11,6 +11,8 @@ import {
   type SVGProps,
 } from "react";
 import { PermissionCode, usePermissions } from "@/lib/permissions";
+import { useAuth } from "@/lib/auth-store";
+import { useBranchContext } from "@/lib/branch-context";
 
 const STORAGE_KEY = "gulio_bo_sidebar";
 
@@ -332,7 +334,7 @@ const navItems: NavItem[] = [
   },
   {
     href: "/purchases/receive",
-    label: "Receive stock",
+    label: "Purchase",
     accent: "emerald",
     icon: IconReceive,
     permission: PermissionCode.STOCK_ADJUST,
@@ -454,6 +456,14 @@ export function BackOfficeSidebar() {
     });
   }, []);
 
+  const { orgContext } = useAuth();
+  const { selectedBranchId } = useBranchContext();
+
+  const selectedBranch = useMemo(() => {
+    if (!selectedBranchId) return null;
+    return (orgContext?.branches ?? []).find((b) => b.id === selectedBranchId) ?? null;
+  }, [orgContext, selectedBranchId]);
+
   return (
     <aside
       className={`relative flex h-full shrink-0 flex-col border-r border-gulio-border bg-gulio-card ease-out ${
@@ -498,6 +508,30 @@ export function BackOfficeSidebar() {
           </button>
         ) : null}
       </div>
+
+      {/* Active Branch Scope Indicator */}
+      {!collapsed ? (
+        <div className="border-b border-slate-100 bg-slate-50/70 px-3.5 py-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              Active Scope
+            </span>
+            <span className="rounded bg-slate-200/70 px-1.5 py-0.2 font-mono text-[9px] font-semibold text-slate-600">
+              {selectedBranch ? selectedBranch.code : "GLOBAL"}
+            </span>
+          </div>
+          <div className="mt-1 flex items-center gap-1.5 truncate text-xs font-bold text-slate-800">
+            <span
+              className={`inline-block h-2 w-2 shrink-0 rounded-full ${
+                selectedBranch ? "bg-sky-500" : "bg-teal-500"
+              }`}
+            />
+            <span className="truncate">
+              {selectedBranch ? selectedBranch.name : "All Branches (Combined)"}
+            </span>
+          </div>
+        </div>
+      ) : null}
 
       {collapsed ? (
         <div className="flex justify-center border-b border-gulio-border py-2">

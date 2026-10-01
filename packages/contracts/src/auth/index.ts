@@ -189,3 +189,54 @@ export type OrganizationContextResponse = {
     opticedge: OpticEdgePublicStatusDto;
   };
 };
+
+export type CreateBranchRequest = {
+  name: string;
+  code: string;
+  initialWarehouseName?: string;
+  isActive?: boolean;
+};
+
+export type UpdateBranchRequest = {
+  name?: string;
+  code?: string;
+  isActive?: boolean;
+};
+
+export type CreateWarehouseRequest = {
+  branchId: string;
+  name: string;
+  isDefault?: boolean;
+};
+
+export type UpdateWarehouseRequest = {
+  branchId?: string;
+  name?: string;
+  isDefault?: boolean;
+};
+
+export type BranchDetailDto = {
+  id: string;
+  name: string;
+  code: string;
+  isActive: boolean;
+  createdAt: string;
+  warehouses: Array<{
+    id: string;
+    branchId: string;
+    name: string;
+    isDefault: boolean;
+    createdAt?: string;
+  }>;
+  registers: Array<{
+    id: string;
+    branchId: string;
+    name: string;
+    code: string;
+    isActive: boolean;
+  }>;
+};
+
+export type BranchListResponse = {
+  branches: BranchDetailDto[];
+};
