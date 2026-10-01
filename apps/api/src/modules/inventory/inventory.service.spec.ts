@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   NotFoundException,
@@ -452,6 +453,168 @@ describe("InventoryService.commitAdjustment", () => {
         }),
       }),
     );
+  });
+});
+
+describe("InventoryService.commitPurchaseReceipt", () => {
+  const orgId = "11111111-1111-1111-1111-111111111111";
+  const warehouseId = "33333333-3333-3333-3333-333333333333";
+  const variantId = "44444444-4444-4444-4444-444444444444";
+
+  const baseBalance: MockBalance = {
+    id: "bal-1",
+    organizationId: orgId,
+    warehouseId,
+    variantId,
+    quantityOnHand: new Prisma.Decimal(5),
+    quantityReserved: new Prisma.Decimal(0),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  it("writes PURCHASE_RECEIPT and increments on-hand (non-serial)", async () => {
+    const { tx, getBalance, movements } = createTxMock(baseBalance, {
+      tracksSerial: false,
+    });
+    const service = createService();
+
+    const result = await service.commitPurchaseReceipt(tx as never, {
+      organizationId: orgId,
+      warehouseId,
+      variantId,
+      quantity: 4,
+      reason: "INV-001",
+      referenceType: "GoodsReceipt",
+      referenceId: "gr-1",
+    });
+
+    expect(result.movements).toHaveLength(1);
+    expect(result.movements[0].movementType).toBe(
+      StockMovementType.PURCHASE_RECEIPT,
+    );
+    expect(result.movements[0].quantityDelta).toBe("4.0000");
+    expect(result.movements[0].reason).toBe("INV-001");
+    expect(result.movements[0].referenceType).toBe("GoodsReceipt");
+    expect(result.movements[0].referenceId).toBe("gr-1");
+    expect(result.balance.quantityOnHand).toBe("9.0000");
+    expect(result.serials).toHaveLength(0);
+    expect(getBalance()!.quantityOnHand.equals(9)).toBe(true);
+    expect(movements[0].movementType).toBe(StockMovementType.PURCHASE_RECEIPT);
+    expect(tx.stockMovement.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to a default reason when the invoice reason is blank", async () => {
+    const { tx } = createTxMock(baseBalance, { tracksSerial: false });
+    const service = createService();
+
+    const result = await service.commitPurchaseReceipt(tx as never, {
+      organizationId: orgId,
+      warehouseId,
+      variantId,
+      quantity: 1,
+      reason: "   ",
+    });
+
+    expect(result.movements[0].reason).toBe("Purchase receipt");
+  });
+
+  it("creates one serial unit and one movement per IMEI", async () => {
+    const { tx, getBalance, movements, serials } = createTxMock(null, {
+      tracksSerial: true,
+      variantId,
+      organizationId: orgId,
+    });
+    const service = createService();
+
+    const result = await service.commitPurchaseReceipt(tx as never, {
+      organizationId: orgId,
+      warehouseId,
+      variantId,
+      quantity: 2,
+      reason: "INV-002",
+      referenceType: "GoodsReceipt",
+      referenceId: "gr-2",
+      serialNumbers: ["IMEI-2001", "IMEI-2002"],
+    });
+
+    expect(result.serials).toHaveLength(2);
+    expect(result.serials[0].serialNumber).toBe("IMEI-2001");
+    expect(result.serials[0].status).toBe(SerialStatus.IN_STOCK);
+    expect(result.movements).toHaveLength(2);
+    expect(
+      result.movements.every(
+        (m: { movementType: string }) =>
+          m.movementType === StockMovementType.PURCHASE_RECEIPT,
+      ),
+    ).toBe(true);
+    expect(
+      result.movements.every(
+        (m: { quantityDelta: string }) => m.quantityDelta === "1.0000",
+      ),
+    ).toBe(true);
+    expect(
+      result.movements.every(
+        (m: { serialUnitId: string | null }) => m.serialUnitId !== null,
+      ),
+    ).toBe(true);
+    expect(result.balance.quantityOnHand).toBe("2.0000");
+    expect(getBalance()!.quantityOnHand.equals(2)).toBe(true);
+    expect(serials).toHaveLength(2);
+    expect(movements).toHaveLength(2);
+    expect(tx.stockBalance.create).toHaveBeenCalled();
+  });
+
+  it("rejects quantity <= 0 and writes nothing", async () => {
+    const { tx } = createTxMock(baseBalance, { tracksSerial: false });
+    const service = createService();
+
+    await expect(
+      service.commitPurchaseReceipt(tx as never, {
+        organizationId: orgId,
+        warehouseId,
+        variantId,
+        quantity: 0,
+        reason: "INV-000",
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(tx.stockMovement.create).not.toHaveBeenCalled();
+    expect(tx.stockBalance.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects a fractional quantity", async () => {
+    const { tx } = createTxMock(baseBalance, { tracksSerial: false });
+    const service = createService();
+
+    await expect(
+      service.commitPurchaseReceipt(tx as never, {
+        organizationId: orgId,
+        warehouseId,
+        variantId,
+        quantity: 1.5,
+        reason: "INV-003",
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("rejects serial count that does not match quantity", async () => {
+    const { tx } = createTxMock(null, {
+      tracksSerial: true,
+      variantId,
+      organizationId: orgId,
+    });
+    const service = createService();
+
+    await expect(
+      service.commitPurchaseReceipt(tx as never, {
+        organizationId: orgId,
+        warehouseId,
+        variantId,
+        quantity: 2,
+        reason: "INV-004",
+        serialNumbers: ["IMEI-3001"],
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 });
 

@@ -17,6 +17,8 @@ import {
 import type {
   CommitAdjustmentInput,
   CommitAdjustmentResult,
+  CommitPurchaseReceiptInput,
+  CommitPurchaseReceiptResult,
   CommitReturnMovementInput,
   CommitReturnMovementResult,
   CommitSaleMovementInput,
@@ -570,6 +572,139 @@ export class InventoryService {
         },
       });
     }
+
+    return {
+      movements: movements.map(mapMovement),
+      balance: mapBalance(balance),
+      serials: serials.map(mapSerial),
+    };
+  }
+
+  /**
+   * Supplier delivery intake (goods receipt). Appends PURCHASE_RECEIPT ledger
+   * row(s) and increments StockBalance — intake only, this path never writes
+   * stock down (write-downs stay on adjustments / returns).
+   *
+   * Must run inside the CALLER's transaction (the goods-receipt row and its
+   * ledger effect must commit atomically), so it takes `tx` and never opens
+   * its own transaction. Persists `referenceType` / `referenceId` on every
+   * movement so each ledger row traces back to the delivery.
+   */
+  async commitPurchaseReceipt(
+    tx: InventoryTx,
+    input: CommitPurchaseReceiptInput,
+  ): Promise<CommitPurchaseReceiptResult> {
+    const quantity = toDecimal(input.quantity);
+    if (!quantity.isFinite() || !quantity.isInteger() || quantity.lte(0)) {
+      throw new BadRequestException(
+        "Purchase receipt quantity must be a whole number greater than zero",
+      );
+    }
+
+    const reason = input.reason?.trim() || "Purchase receipt";
+
+    const variant = await tx.variant.findFirst({
+      where: {
+        id: input.variantId,
+        organizationId: input.organizationId,
+      },
+    });
+    if (!variant) {
+      throw new NotFoundException(`Variant ${input.variantId} not found`);
+    }
+
+    const movements: StockMovement[] = [];
+    const serials: SerialUnit[] = [];
+
+    if (variant.tracksSerial) {
+      const serialNumbers = (input.serialNumbers ?? [])
+        .map((s: string) => s.trim())
+        .filter(Boolean);
+      if (!quantity.equals(serialNumbers.length)) {
+        throw new BadRequestException(
+          "serialNumbers length must equal quantity for serial-tracked receipts",
+        );
+      }
+
+      const uniqueSerials = new Set(
+        serialNumbers.map((s: string) => s.toUpperCase()),
+      );
+      if (uniqueSerials.size !== serialNumbers.length) {
+        throw new BadRequestException("serialNumbers must be unique");
+      }
+
+      for (const raw of serialNumbers) {
+        const serialNumber = normalizeSerialNumber(raw);
+        const clash = await tx.serialUnit.findFirst({
+          where: liveSerialNumberWhere(input.organizationId, serialNumber),
+        });
+        if (clash) {
+          throw new ConflictException(
+            `Serial number already exists: ${serialNumber}`,
+          );
+        }
+
+        let serial: SerialUnit;
+        try {
+          serial = await tx.serialUnit.create({
+            data: {
+              organizationId: input.organizationId,
+              variantId: input.variantId,
+              warehouseId: input.warehouseId,
+              serialNumber,
+              status: SerialStatus.IN_STOCK,
+            },
+          });
+        } catch (err) {
+          rethrowLiveSerialConflict(err, serialNumber);
+        }
+        serials.push(serial);
+
+        const movement = await tx.stockMovement.create({
+          data: {
+            organizationId: input.organizationId,
+            warehouseId: input.warehouseId,
+            variantId: input.variantId,
+            movementType: StockMovementType.PURCHASE_RECEIPT,
+            quantityDelta: new Prisma.Decimal(1),
+            referenceType: input.referenceType,
+            referenceId: input.referenceId,
+            serialUnitId: serial.id,
+            createdByUserId: input.createdByUserId,
+            reason,
+          },
+        });
+        movements.push(movement);
+      }
+    } else {
+      const movement = await tx.stockMovement.create({
+        data: {
+          organizationId: input.organizationId,
+          warehouseId: input.warehouseId,
+          variantId: input.variantId,
+          movementType: StockMovementType.PURCHASE_RECEIPT,
+          quantityDelta: quantity,
+          referenceType: input.referenceType,
+          referenceId: input.referenceId,
+          createdByUserId: input.createdByUserId,
+          reason,
+        },
+      });
+      movements.push(movement);
+    }
+
+    let balance = await this.ensureBalance(
+      tx,
+      input.organizationId,
+      input.warehouseId,
+      input.variantId,
+    );
+    balance = await tx.stockBalance.update({
+      where: { id: balance.id },
+      data: {
+        quantityOnHand: { increment: quantity },
+      },
+    });
 
     return {
       movements: movements.map(mapMovement),

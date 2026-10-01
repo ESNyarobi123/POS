@@ -134,6 +134,35 @@ export interface CommitAdjustmentResult {
   serials: SerialUnitDto[];
 }
 
+/**
+ * Supplier delivery intake (goods receipt). Intake-only: stock enters the
+ * ledger as PURCHASE_RECEIPT movements inside the caller's transaction, so the
+ * receipt row and its stock effect always commit together.
+ *
+ * Persist `referenceType: "GoodsReceipt"` + `referenceId` so every ledger row
+ * can be traced back to the delivery that produced it.
+ */
+export interface CommitPurchaseReceiptInput {
+  organizationId: string;
+  warehouseId: string;
+  variantId: string;
+  /** Whole units received. Must be > 0 — receipts never write stock down. */
+  quantity: number | DecimalString;
+  /** Ledger movement reason, e.g. the invoice number being received. */
+  reason: string;
+  /** Required when variant.tracksSerial; length must equal quantity. */
+  serialNumbers?: string[];
+  createdByUserId?: string;
+  referenceType?: string;
+  referenceId?: string;
+}
+
+export interface CommitPurchaseReceiptResult {
+  movements: StockMovementDto[];
+  balance: StockBalanceDto;
+  serials: SerialUnitDto[];
+}
+
 export type CreateStockAdjustmentRequest = {
   warehouseId: string;
   variantId: string;

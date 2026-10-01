@@ -8,11 +8,14 @@
 // Money: Decimal(19, 4) — never float.
 // Tenancy: organizationId on tenant rows; branchId / warehouseId where scoped.
 //
-// Phase 2 OMITTED (deferred migrations): Supplier, PurchaseOrder, POLine,
-// GoodsReceipt, GRLine, SupplierInvoice, StockTransfer, StockTransferLine,
+// Phase 2 OMITTED (deferred migrations): PurchaseOrder, POLine, GRLine,
+// SupplierInvoice, StockTransfer, StockTransferLine,
 // LoyaltyAccount, LoyaltyLedger, StoreCredit, ExternalProductMap,
 // WarrantyRecord, ProviderPayment, WebhookDelivery, SyncState, Exchange.
 // See docs/database.md §3–4. Do not run production migrate until ERD approved.
+//
+// Phase 2 SLICE shipped: Supplier, GoodsReceipt, GoodsReceiptLine,
+// GoodsReceiptSerial, SupplierPayment (see end of file).
 // =============================================================================
 
 generator client {
@@ -133,6 +136,22 @@ enum UserPermissionEffect {
   DENY
 }
 
+/// Purchase receiving (Phase 2 slice). POSTED receipts have written ledger movements.
+enum GoodsReceiptStatus {
+  DRAFT
+  POSTED
+  CANCELLED
+}
+
+/// Tender used to settle a supplier balance. Bank transfer is the common case.
+enum SupplierPaymentMethod {
+  CASH
+  MOBILE_MONEY_MANUAL
+  CARD
+  BANK_TRANSFER
+  OTHER
+}
+
 // ---------------------------------------------------------------------------
 // Org / auth (Phase 1)
 // ---------------------------------------------------------------------------
@@ -147,34 +166,38 @@ model Organization {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  branches          Branch[]
-  warehouses        Warehouse[]
-  registers         Register[]
-  registerSessions  RegisterSession[]
-  users             User[]
-  roles             Role[]
-  userPermissions   UserPermission[]
-  brands            Brand[]
-  categories        Category[]
-  products          Product[]
-  variants          Variant[]
-  barcodes          Barcode[]
-  priceHistories    PriceHistory[]
-  serialUnits       SerialUnit[]
-  stockBalances     StockBalance[]
-  stockMovements    StockMovement[]
-  stockCounts       StockCount[]
-  customers         Customer[]
-  sales             Sale[]
-  saleItems         SaleItem[]
-  payments          Payment[]
-  heldSales         HeldSale[]
-  returns           Return[]
-  auditLogs             AuditLog[]
-  outboxEvents          OutboxEvent[]
-  fiscalDocuments       FiscalDocument[]
-  selcomPaymentIntents  SelcomPaymentIntent[]
-  opticedgeCashIns      OpticEdgeCashIn[]
+  branches             Branch[]
+  warehouses           Warehouse[]
+  registers            Register[]
+  registerSessions     RegisterSession[]
+  users                User[]
+  roles                Role[]
+  userPermissions      UserPermission[]
+  brands               Brand[]
+  categories           Category[]
+  products             Product[]
+  variants             Variant[]
+  barcodes             Barcode[]
+  priceHistories       PriceHistory[]
+  serialUnits          SerialUnit[]
+  stockBalances        StockBalance[]
+  stockMovements       StockMovement[]
+  stockCounts          StockCount[]
+  customers            Customer[]
+  sales                Sale[]
+  saleItems            SaleItem[]
+  payments             Payment[]
+  heldSales            HeldSale[]
+  returns              Return[]
+  auditLogs            AuditLog[]
+  outboxEvents         OutboxEvent[]
+  fiscalDocuments      FiscalDocument[]
+  selcomPaymentIntents SelcomPaymentIntent[]
+  opticedgeCashIns     OpticEdgeCashIn[]
+  suppliers            Supplier[]
+  goodsReceipts        GoodsReceipt[]
+  goodsReceiptLines    GoodsReceiptLine[]
+  supplierPayments     SupplierPayment[]
 
   @@map("organizations")
 }
@@ -195,6 +218,7 @@ model Branch {
   userBranches     UserBranch[]
   sales            Sale[]
   returns          Return[]
+  goodsReceipts    GoodsReceipt[]
 
   @@unique([organizationId, code])
   @@index([organizationId])
@@ -217,6 +241,7 @@ model Warehouse {
   stockMovements StockMovement[]
   stockCounts    StockCount[]
   sales          Sale[]
+  goodsReceipts  GoodsReceipt[]
 
   @@index([organizationId])
   @@index([branchId])
@@ -262,12 +287,12 @@ model RegisterSession {
   createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  register     Register     @relation(fields: [registerId], references: [id])
-  branch       Branch       @relation(fields: [branchId], references: [id])
-  openedBy           User                  @relation("SessionOpenedBy", fields: [openedByUserId], references: [id])
-  closedBy           User?                 @relation("SessionClosedBy", fields: [closedByUserId], references: [id])
-  sales              Sale[]
+  organization         Organization          @relation(fields: [organizationId], references: [id])
+  register             Register              @relation(fields: [registerId], references: [id])
+  branch               Branch                @relation(fields: [branchId], references: [id])
+  openedBy             User                  @relation("SessionOpenedBy", fields: [openedByUserId], references: [id])
+  closedBy             User?                 @relation("SessionClosedBy", fields: [closedByUserId], references: [id])
+  sales                Sale[]
   selcomPaymentIntents SelcomPaymentIntent[]
 
   @@index([organizationId])
@@ -277,32 +302,34 @@ model RegisterSession {
 }
 
 model User {
-  id             String   @id @default(uuid()) @db.Uuid
-  organizationId String   @map("organization_id") @db.Uuid
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
   email          String
-  passwordHash   String   @map("password_hash")
-  fullName       String   @map("full_name")
-  pinHash        String?  @map("pin_hash")
-  isActive       Boolean  @default(true) @map("is_active")
+  passwordHash   String    @map("password_hash")
+  fullName       String    @map("full_name")
+  pinHash        String?   @map("pin_hash")
+  isActive       Boolean   @default(true) @map("is_active")
   deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(3)
-  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  organization         Organization      @relation(fields: [organizationId], references: [id])
-  userRoles            UserRole[]
-  userBranches         UserBranch[]
-  userPermissions      UserPermission[]
-  sessionsOpened       RegisterSession[] @relation("SessionOpenedBy")
-  sessionsClosed       RegisterSession[] @relation("SessionClosedBy")
-  priceChanges         PriceHistory[]
-  stockMovements       StockMovement[]
-  stockCounts          StockCount[]
-  salesAsCashier       Sale[]            @relation("SaleCashier")
-  heldSales            HeldSale[]
-  returnsProcessed     Return[]          @relation("ReturnProcessedBy")
-  returnsApproved      Return[]          @relation("ReturnApprovedBy")
-  auditLogs              AuditLog[]
-  selcomPaymentIntents   SelcomPaymentIntent[] @relation("SelcomIntentCashier")
+  organization          Organization          @relation(fields: [organizationId], references: [id])
+  userRoles             UserRole[]
+  userBranches          UserBranch[]
+  userPermissions       UserPermission[]
+  sessionsOpened        RegisterSession[]     @relation("SessionOpenedBy")
+  sessionsClosed        RegisterSession[]     @relation("SessionClosedBy")
+  priceChanges          PriceHistory[]
+  stockMovements        StockMovement[]
+  stockCounts           StockCount[]
+  salesAsCashier        Sale[]                @relation("SaleCashier")
+  heldSales             HeldSale[]
+  returnsProcessed      Return[]              @relation("ReturnProcessedBy")
+  returnsApproved       Return[]              @relation("ReturnApprovedBy")
+  auditLogs             AuditLog[]
+  selcomPaymentIntents  SelcomPaymentIntent[] @relation("SelcomIntentCashier")
+  goodsReceiptsReceived GoodsReceipt[]        @relation("GoodsReceiptReceivedBy")
+  supplierPaymentsMade  SupplierPayment[]     @relation("SupplierPaymentRecordedBy")
 
   @@unique([organizationId, email])
   @@index([organizationId])
@@ -469,14 +496,15 @@ model Variant {
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  organization   Organization    @relation(fields: [organizationId], references: [id])
-  product        Product         @relation(fields: [productId], references: [id])
+  organization   Organization       @relation(fields: [organizationId], references: [id])
+  product        Product            @relation(fields: [productId], references: [id])
   barcodes       Barcode[]
   priceHistories PriceHistory[]
   serialUnits    SerialUnit[]
   stockBalances  StockBalance[]
   stockMovements StockMovement[]
   saleItems      SaleItem[]
+  receiptLines   GoodsReceiptLine[]
 
   @@unique([organizationId, sku])
   @@index([organizationId])
@@ -536,13 +564,14 @@ model SerialUnit {
   createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  organization    Organization     @relation(fields: [organizationId], references: [id])
-  variant         Variant          @relation(fields: [variantId], references: [id])
-  warehouse       Warehouse        @relation(fields: [warehouseId], references: [id])
-  currentSaleItem SaleItem?        @relation("SerialCurrentSaleItem", fields: [currentSaleItemId], references: [id])
+  organization    Organization         @relation(fields: [organizationId], references: [id])
+  variant         Variant              @relation(fields: [variantId], references: [id])
+  warehouse       Warehouse            @relation(fields: [warehouseId], references: [id])
+  currentSaleItem SaleItem?            @relation("SerialCurrentSaleItem", fields: [currentSaleItemId], references: [id])
   stockMovements  StockMovement[]
   saleItemSerials SaleItemSerial[]
   returnItems     ReturnItem[]
+  receiptSerials  GoodsReceiptSerial[]
 
   // Live uniqueness is a partial unique index in SQL:
   // (organization_id, serial_number) WHERE status <> 'REMOVED'
@@ -554,14 +583,14 @@ model SerialUnit {
 
 /// Projected on-hand qty per warehouse × variant. Updated only via movement commits.
 model StockBalance {
-  id                String   @id @default(uuid()) @db.Uuid
-  organizationId    String   @map("organization_id") @db.Uuid
-  warehouseId       String   @map("warehouse_id") @db.Uuid
-  variantId         String   @map("variant_id") @db.Uuid
-  quantityOnHand    Decimal  @default(0) @map("quantity_on_hand") @db.Decimal(19, 4)
-  quantityReserved  Decimal  @default(0) @map("quantity_reserved") @db.Decimal(19, 4)
-  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  id               String   @id @default(uuid()) @db.Uuid
+  organizationId   String   @map("organization_id") @db.Uuid
+  warehouseId      String   @map("warehouse_id") @db.Uuid
+  variantId        String   @map("variant_id") @db.Uuid
+  quantityOnHand   Decimal  @default(0) @map("quantity_on_hand") @db.Decimal(19, 4)
+  quantityReserved Decimal  @default(0) @map("quantity_reserved") @db.Decimal(19, 4)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   organization Organization @relation(fields: [organizationId], references: [id])
   warehouse    Warehouse    @relation(fields: [warehouseId], references: [id])
@@ -666,13 +695,13 @@ model Sale {
   createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  organization    Organization    @relation(fields: [organizationId], references: [id])
-  branch          Branch          @relation(fields: [branchId], references: [id])
-  warehouse       Warehouse       @relation(fields: [warehouseId], references: [id])
-  register        Register        @relation(fields: [registerId], references: [id])
-  registerSession RegisterSession @relation(fields: [registerSessionId], references: [id])
-  cashier         User            @relation("SaleCashier", fields: [cashierUserId], references: [id])
-  customer        Customer?       @relation(fields: [customerId], references: [id])
+  organization         Organization          @relation(fields: [organizationId], references: [id])
+  branch               Branch                @relation(fields: [branchId], references: [id])
+  warehouse            Warehouse             @relation(fields: [warehouseId], references: [id])
+  register             Register              @relation(fields: [registerId], references: [id])
+  registerSession      RegisterSession       @relation(fields: [registerSessionId], references: [id])
+  cashier              User                  @relation("SaleCashier", fields: [cashierUserId], references: [id])
+  customer             Customer?             @relation(fields: [customerId], references: [id])
   items                SaleItem[]
   payments             Payment[]
   returns              Return[]
@@ -695,19 +724,21 @@ model SaleItem {
   variantId      String  @map("variant_id") @db.Uuid
   quantity       Decimal @db.Decimal(19, 4)
   unitPrice      Decimal @map("unit_price") @db.Decimal(19, 4)
-  /** Catalog sell price at checkout — never mutated after the sale. */
+  /**
+   * Catalog sell price at checkout — never mutated after the sale.
+   */
   listUnitPrice  Decimal @map("list_unit_price") @db.Decimal(19, 4)
   discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(19, 4)
   taxAmount      Decimal @default(0) @map("tax_amount") @db.Decimal(19, 4)
   lineTotal      Decimal @map("line_total") @db.Decimal(19, 4)
   tracksSerial   Boolean @default(false) @map("tracks_serial")
 
-  organization        Organization     @relation(fields: [organizationId], references: [id])
-  sale                Sale             @relation(fields: [saleId], references: [id])
-  variant             Variant          @relation(fields: [variantId], references: [id])
-  serials             SaleItemSerial[]
-  currentSerialUnits  SerialUnit[]     @relation("SerialCurrentSaleItem")
-  returnItems         ReturnItem[]
+  organization       Organization     @relation(fields: [organizationId], references: [id])
+  sale               Sale             @relation(fields: [saleId], references: [id])
+  variant            Variant          @relation(fields: [variantId], references: [id])
+  serials            SaleItemSerial[]
+  currentSerialUnits SerialUnit[]     @relation("SerialCurrentSaleItem")
+  returnItems        ReturnItem[]
 
   @@index([organizationId])
   @@index([saleId])
@@ -766,18 +797,18 @@ model HeldSale {
 }
 
 model Return {
-  id                 String       @id @default(uuid()) @db.Uuid
-  organizationId     String       @map("organization_id") @db.Uuid
-  saleId             String       @map("sale_id") @db.Uuid
-  branchId           String       @map("branch_id") @db.Uuid
-  processedByUserId  String       @map("processed_by_user_id") @db.Uuid
-  approvedByUserId   String?      @map("approved_by_user_id") @db.Uuid
-  status             ReturnStatus @default(PENDING)
-  refundTotal        Decimal      @default(0) @map("refund_total") @db.Decimal(19, 4)
-  reasonCode         String?      @map("reason_code")
-  processedAt        DateTime?    @map("processed_at") @db.Timestamptz(3)
-  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt          DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                String       @id @default(uuid()) @db.Uuid
+  organizationId    String       @map("organization_id") @db.Uuid
+  saleId            String       @map("sale_id") @db.Uuid
+  branchId          String       @map("branch_id") @db.Uuid
+  processedByUserId String       @map("processed_by_user_id") @db.Uuid
+  approvedByUserId  String?      @map("approved_by_user_id") @db.Uuid
+  status            ReturnStatus @default(PENDING)
+  refundTotal       Decimal      @default(0) @map("refund_total") @db.Decimal(19, 4)
+  reasonCode        String?      @map("reason_code")
+  processedAt       DateTime?    @map("processed_at") @db.Timestamptz(3)
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   organization Organization @relation(fields: [organizationId], references: [id])
   sale         Sale         @relation(fields: [saleId], references: [id])
@@ -793,13 +824,13 @@ model Return {
 }
 
 model ReturnItem {
-  id            String            @id @default(uuid()) @db.Uuid
-  returnId      String            @map("return_id") @db.Uuid
-  saleItemId    String            @map("sale_item_id") @db.Uuid
-  serialUnitId  String?           @map("serial_unit_id") @db.Uuid
-  quantity      Decimal           @db.Decimal(19, 4)
-  disposition   ReturnDisposition
-  refundAmount  Decimal           @map("refund_amount") @db.Decimal(19, 4)
+  id           String            @id @default(uuid()) @db.Uuid
+  returnId     String            @map("return_id") @db.Uuid
+  saleItemId   String            @map("sale_item_id") @db.Uuid
+  serialUnitId String?           @map("serial_unit_id") @db.Uuid
+  quantity     Decimal           @db.Decimal(19, 4)
+  disposition  ReturnDisposition
+  refundAmount Decimal           @map("refund_amount") @db.Decimal(19, 4)
 
   returnDoc  Return      @relation(fields: [returnId], references: [id])
   saleItem   SaleItem    @relation(fields: [saleItemId], references: [id])
@@ -853,25 +884,25 @@ model OutboxEvent {
 
 /// Selcom Checkout order + wallet push. Collected before POS checkout completes.
 model SelcomPaymentIntent {
-  id                 String              @id @default(uuid()) @db.Uuid
-  organizationId     String              @map("organization_id") @db.Uuid
-  registerSessionId  String              @map("register_session_id") @db.Uuid
-  cashierUserId      String              @map("cashier_user_id") @db.Uuid
-  saleId             String?             @map("sale_id") @db.Uuid
-  orderId            String              @unique @map("order_id")
-  pushTransid        String              @unique @map("push_transid")
-  msisdn             String
-  amount             Decimal             @db.Decimal(19, 4)
-  currency           String              @default("TZS") @db.VarChar(3)
-  status             SelcomPaymentStatus @default(PENDING)
-  providerReference  String?             @map("provider_reference")
-  providerTransid    String?             @map("provider_transid")
-  channel            String?
-  lastMessage        String?             @map("last_message")
-  providerPayload    Json?               @map("provider_payload")
-  completedAt        DateTime?           @map("completed_at") @db.Timestamptz(3)
-  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                String              @id @default(uuid()) @db.Uuid
+  organizationId    String              @map("organization_id") @db.Uuid
+  registerSessionId String              @map("register_session_id") @db.Uuid
+  cashierUserId     String              @map("cashier_user_id") @db.Uuid
+  saleId            String?             @map("sale_id") @db.Uuid
+  orderId           String              @unique @map("order_id")
+  pushTransid       String              @unique @map("push_transid")
+  msisdn            String
+  amount            Decimal             @db.Decimal(19, 4)
+  currency          String              @default("TZS") @db.VarChar(3)
+  status            SelcomPaymentStatus @default(PENDING)
+  providerReference String?             @map("provider_reference")
+  providerTransid   String?             @map("provider_transid")
+  channel           String?
+  lastMessage       String?             @map("last_message")
+  providerPayload   Json?               @map("provider_payload")
+  completedAt       DateTime?           @map("completed_at") @db.Timestamptz(3)
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   organization    Organization    @relation(fields: [organizationId], references: [id])
   registerSession RegisterSession @relation(fields: [registerSessionId], references: [id])
@@ -885,24 +916,24 @@ model SelcomPaymentIntent {
 
 /// OpticEdge cash-in after a local POS sale. Sale stays complete if the post fails.
 model OpticEdgeCashIn {
-  id             String               @id @default(uuid()) @db.Uuid
-  organizationId String               @map("organization_id") @db.Uuid
-  saleId         String               @unique @map("sale_id") @db.Uuid
-  channelId      Int                  @map("channel_id")
-  channelName    String               @map("channel_name")
-  channelType    String               @map("channel_type")
-  amount         Decimal              @db.Decimal(19, 4)
+  id             String                @id @default(uuid()) @db.Uuid
+  organizationId String                @map("organization_id") @db.Uuid
+  saleId         String                @unique @map("sale_id") @db.Uuid
+  channelId      Int                   @map("channel_id")
+  channelName    String                @map("channel_name")
+  channelType    String                @map("channel_type")
+  amount         Decimal               @db.Decimal(19, 4)
   reference      String
   status         OpticEdgeCashInStatus @default(PENDING)
-  externalId     Int?                 @map("external_id")
-  replayed       Boolean              @default(false)
-  attempts       Int                  @default(0)
-  lastError      String?              @map("last_error")
-  requestJson    Json?                @map("request_json")
-  responseJson   Json?                @map("response_json")
-  sentAt         DateTime?            @map("sent_at") @db.Timestamptz(3)
-  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  externalId     Int?                  @map("external_id")
+  replayed       Boolean               @default(false)
+  attempts       Int                   @default(0)
+  lastError      String?               @map("last_error")
+  requestJson    Json?                 @map("request_json")
+  responseJson   Json?                 @map("response_json")
+  sentAt         DateTime?             @map("sent_at") @db.Timestamptz(3)
+  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   organization Organization @relation(fields: [organizationId], references: [id])
   sale         Sale         @relation(fields: [saleId], references: [id])
@@ -932,4 +963,139 @@ model FiscalDocument {
   @@unique([organizationId, idempotencyKey])
   @@index([organizationId])
   @@map("fiscal_documents")
+}
+
+// ---------------------------------------------------------------------------
+// Purchasing (Phase 2 slice) — suppliers, goods receipt, supplier payments
+//
+// Stock still moves ONLY through StockMovement. Posting a GoodsReceipt calls
+// InventoryService.commitPurchaseReceipt() inside the same transaction, which
+// writes PURCHASE_RECEIPT movements and updates StockBalance.
+//
+// Purchase orders / partial receiving / supplier invoices remain deferred.
+// ---------------------------------------------------------------------------
+
+model Supplier {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  name           String
+  phone          String?
+  email          String?
+  address        String?
+  notes          String?
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization      @relation(fields: [organizationId], references: [id])
+  receipts     GoodsReceipt[]
+  payments     SupplierPayment[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@index([organizationId, isActive])
+  @@map("suppliers")
+}
+
+/// One supplier delivery received into a warehouse. Money is Decimal, never float.
+model GoodsReceipt {
+  id               String             @id @default(uuid()) @db.Uuid
+  organizationId   String             @map("organization_id") @db.Uuid
+  branchId         String             @map("branch_id") @db.Uuid
+  warehouseId      String             @map("warehouse_id") @db.Uuid
+  supplierId       String?            @map("supplier_id") @db.Uuid
+  /// Supplier invoice / delivery note reference. Nullable for walk-in purchases.
+  invoiceNumber    String?            @map("invoice_number")
+  status           GoodsReceiptStatus @default(POSTED)
+  /// Why the stock was received — mirrors the adjustment reason on the ledger row.
+  reason           String?
+  notes            String?
+  subtotal         Decimal            @default(0) @db.Decimal(19, 4)
+  discountTotal    Decimal            @default(0) @map("discount_total") @db.Decimal(19, 4)
+  taxTotal         Decimal            @default(0) @map("tax_total") @db.Decimal(19, 4)
+  total            Decimal            @default(0) @db.Decimal(19, 4)
+  receivedByUserId String             @map("received_by_user_id") @db.Uuid
+  receivedAt       DateTime           @default(now()) @map("received_at") @db.Timestamptz(3)
+  postedAt         DateTime?          @map("posted_at") @db.Timestamptz(3)
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization       @relation(fields: [organizationId], references: [id])
+  branch       Branch             @relation(fields: [branchId], references: [id])
+  warehouse    Warehouse          @relation(fields: [warehouseId], references: [id])
+  supplier     Supplier?          @relation(fields: [supplierId], references: [id])
+  receivedBy   User               @relation("GoodsReceiptReceivedBy", fields: [receivedByUserId], references: [id])
+  lines        GoodsReceiptLine[]
+  payments     SupplierPayment[]
+
+  /// Postgres allows repeated NULLs, so invoice-less receipts are still fine.
+  @@unique([organizationId, invoiceNumber])
+  @@index([organizationId, receivedAt])
+  @@index([branchId])
+  @@index([supplierId])
+  @@index([warehouseId])
+  @@map("goods_receipts")
+}
+
+model GoodsReceiptLine {
+  id             String  @id @default(uuid()) @db.Uuid
+  organizationId String  @map("organization_id") @db.Uuid
+  receiptId      String  @map("receipt_id") @db.Uuid
+  variantId      String  @map("variant_id") @db.Uuid
+  quantity       Decimal @db.Decimal(19, 4)
+  /// Wholesale / buy price per unit charged by the supplier.
+  unitCost       Decimal @map("unit_cost") @db.Decimal(19, 4)
+  /// Catalog sell price captured at receipt time — the retail reference column.
+  retailPrice    Decimal @map("retail_price") @db.Decimal(19, 4)
+  lineTotal      Decimal @map("line_total") @db.Decimal(19, 4)
+  tracksSerial   Boolean @default(false) @map("tracks_serial")
+
+  organization Organization         @relation(fields: [organizationId], references: [id])
+  receipt      GoodsReceipt         @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  variant      Variant              @relation(fields: [variantId], references: [id])
+  serials      GoodsReceiptSerial[]
+
+  @@index([organizationId])
+  @@index([receiptId])
+  @@index([variantId])
+  @@map("goods_receipt_lines")
+}
+
+/// Links the IMEIs a receipt brought in to the line they arrived on.
+model GoodsReceiptSerial {
+  receiptLineId String @map("receipt_line_id") @db.Uuid
+  serialUnitId  String @map("serial_unit_id") @db.Uuid
+
+  receiptLine GoodsReceiptLine @relation(fields: [receiptLineId], references: [id], onDelete: Cascade)
+  serialUnit  SerialUnit       @relation(fields: [serialUnitId], references: [id])
+
+  @@id([receiptLineId, serialUnitId])
+  @@index([serialUnitId])
+  @@map("goods_receipt_serials")
+}
+
+/// Money paid to a supplier. Attach to a receipt for per-invoice balances, or
+/// leave `receiptId` null for an on-account payment that clears oldest invoices.
+model SupplierPayment {
+  id               String                @id @default(uuid()) @db.Uuid
+  organizationId   String                @map("organization_id") @db.Uuid
+  supplierId       String                @map("supplier_id") @db.Uuid
+  receiptId        String?               @map("receipt_id") @db.Uuid
+  amount           Decimal               @db.Decimal(19, 4)
+  method           SupplierPaymentMethod
+  reference        String?
+  note             String?
+  paidAt           DateTime              @default(now()) @map("paid_at") @db.Timestamptz(3)
+  recordedByUserId String                @map("recorded_by_user_id") @db.Uuid
+  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization Organization  @relation(fields: [organizationId], references: [id])
+  supplier     Supplier      @relation(fields: [supplierId], references: [id])
+  receipt      GoodsReceipt? @relation(fields: [receiptId], references: [id])
+  recordedBy   User          @relation("SupplierPaymentRecordedBy", fields: [recordedByUserId], references: [id])
+
+  @@index([organizationId, paidAt])
+  @@index([supplierId])
+  @@index([receiptId])
+  @@map("supplier_payments")
 }

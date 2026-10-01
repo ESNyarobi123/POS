@@ -1,18 +1,21 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Button,
+  Chip,
+  Input,
   Modal,
   ModalBody,
   ModalContent,
   ModalFooter,
   ModalHeader,
+  Textarea,
 } from "@heroui/react";
 import type { ProductListItemDto, ProductListResponse } from "@gulio/contracts";
 import { ProductThumb } from "@/components/backoffice/ProductThumb";
 import { ApiError, apiFetch } from "@/lib/api";
-import { formatMoney } from "@/lib/money";
+import { formatMoney, lineTotal, parseMoneyInput } from "@/lib/money";
 
 export type ReceiveLineDraft = {
   key: string;
@@ -23,6 +26,10 @@ export type ReceiveLineDraft = {
   imageUrl: string | null;
   tracksSerial: boolean;
   quantity: number;
+  /** Wholesale / buy price per unit — decimal string, never float. */
+  unitCost: string;
+  /** Catalog sell price captured for this receipt line — decimal string. */
+  retailPrice: string;
   serialNumbers: string[];
 };
 
@@ -40,18 +47,22 @@ type Props = {
   isOpen: boolean;
   onClose: () => void;
   onAdd: (line: ReceiveLineDraft) => void;
-  /** Already on the receive sheet — skip duplicates */
+  /** Already on the receive sheet — skip duplicates. */
   excludeVariantIds?: string[];
 };
 
-const inputClass =
-  "w-full rounded-xl border border-gulio-border bg-white px-3.5 py-2.5 text-sm text-gulio-text outline-none transition placeholder:text-gulio-muted/70 focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20";
+const inputClassNames = {
+  label: "text-[10px] font-semibold uppercase tracking-wider text-gulio-muted",
+  inputWrapper:
+    "min-h-10 rounded-lg border border-gulio-border bg-white shadow-none data-[hover=true]:border-slate-300 group-data-[focus=true]:border-teal-500",
+  input: "text-sm text-gulio-text",
+} as const;
 
 const btnSecondary =
   "min-h-10 min-w-[96px] rounded-md border-2 border-slate-200 bg-white font-semibold text-gulio-text shadow-sm transition-all duration-150 hover:border-slate-400 hover:bg-slate-50 data-[hover=true]:border-slate-400 data-[hover=true]:bg-slate-50";
 
 const btnPrimary =
-  "min-h-10 min-w-[112px] rounded-md border-2 border-teal-700 bg-teal-600 font-semibold text-white shadow-sm transition-all duration-150 hover:border-teal-800 hover:bg-teal-700 data-[hover=true]:bg-teal-700";
+  "min-h-10 min-w-[132px] rounded-md border-2 border-teal-700 bg-teal-600 font-semibold text-white shadow-sm transition-all duration-150 hover:border-teal-800 hover:bg-teal-700 data-[hover=true]:bg-teal-700";
 
 function flatten(items: ProductListItemDto[]): VariantOption[] {
   const out: VariantOption[] = [];
@@ -79,6 +90,24 @@ function parseSerials(raw: string): string[] {
     .filter(Boolean);
 }
 
+/** Display-only decimal subtraction (mirrors lib/format helpers, never the money path). */
+function subtractDecimal(a: string, b: string): number {
+  const na = Number(a);
+  const nb = Number(b);
+  if (!Number.isFinite(na) || !Number.isFinite(nb)) return 0;
+  return na - nb;
+}
+
+function isPositiveDecimal(raw: string): boolean {
+  const n = Number(raw.replace(/,/g, "").trim());
+  return Number.isFinite(n) && n > 0;
+}
+
+function isNonNegativeDecimal(raw: string): boolean {
+  const n = Number(raw.replace(/,/g, "").trim());
+  return Number.isFinite(n) && n >= 0;
+}
+
 export function AddReceiveLineModal({
   isOpen,
   onClose,
@@ -91,13 +120,12 @@ export function AddReceiveLineModal({
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<VariantOption | null>(null);
   const [qty, setQty] = useState("1");
+  const [unitCost, setUnitCost] = useState("");
+  const [retailPrice, setRetailPrice] = useState("");
   const [serialText, setSerialText] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const excluded = useMemo(
-    () => new Set(excludeVariantIds),
-    [excludeVariantIds],
-  );
+  const excluded = useMemo(() => new Set(excludeVariantIds), [excludeVariantIds]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -105,6 +133,8 @@ export function AddReceiveLineModal({
     setQuery("");
     setSelected(null);
     setQty("1");
+    setUnitCost("");
+    setRetailPrice("");
     setSerialText("");
     setError(null);
 
@@ -118,9 +148,7 @@ export function AddReceiveLineModal({
         if (!cancelled) setVariants(flatten(res.items));
       } catch (e) {
         if (!cancelled) {
-          setError(
-            e instanceof ApiError ? e.message : "Could not load catalog",
-          );
+          setError(e instanceof ApiError ? e.message : "Could not load catalog");
           setVariants([]);
         }
       } finally {
@@ -150,9 +178,20 @@ export function AddReceiveLineModal({
   const qtyNum = Number(qty.replace(/,/g, "").trim());
   const serials = parseSerials(serialText);
 
+  // Display-only derived figures. The authoritative totals are recomputed by the
+  // API when the receipt is posted; unit cost / retail price stay decimal strings.
+  const safeQty = Number.isFinite(qtyNum) && qtyNum > 0 ? qtyNum : 0;
+  const lineTotalNumber = isPositiveDecimal(unitCost)
+    ? lineTotal(parseMoneyInput(unitCost), safeQty)
+    : 0;
+  const marginPerUnit = subtractDecimal(retailPrice, unitCost);
+  const potentialMargin = marginPerUnit * safeQty;
+
   function pick(v: VariantOption) {
     setSelected(v);
     setQty("1");
+    setUnitCost("");
+    setRetailPrice(v.price ?? "");
     setSerialText("");
     setError(null);
     setStep(2);
@@ -168,12 +207,21 @@ export function AddReceiveLineModal({
       setError("Enter a whole quantity ≥ 1");
       return;
     }
+    if (!isPositiveDecimal(unitCost)) {
+      setError("Enter the wholesale / unit cost charged by the supplier");
+      return;
+    }
+    if (!isNonNegativeDecimal(retailPrice)) {
+      setError("Enter a retail price (0 or more)");
+      return;
+    }
     if (selected.tracksSerial && serials.length !== qtyNum) {
       setError(
-        `Enter exactly ${qtyNum} IMEI/serial${qtyNum === 1 ? "" : "s"}`,
+        `Enter exactly ${qtyNum} IMEI/serial${qtyNum === 1 ? "" : "s"} — you have ${serials.length}.`,
       );
       return;
     }
+
     onAdd({
       key: `${selected.variantId}-${Date.now()}`,
       variantId: selected.variantId,
@@ -183,6 +231,8 @@ export function AddReceiveLineModal({
       imageUrl: selected.imageUrl,
       tracksSerial: selected.tracksSerial,
       quantity: qtyNum,
+      unitCost: parseMoneyInput(unitCost),
+      retailPrice: parseMoneyInput(retailPrice),
       serialNumbers: selected.tracksSerial ? serials : [],
     });
     onClose();
@@ -194,7 +244,7 @@ export function AddReceiveLineModal({
       onOpenChange={(open) => {
         if (!open) onClose();
       }}
-      size="lg"
+      size="2xl"
       scrollBehavior="inside"
       placement="center"
       classNames={{
@@ -216,7 +266,7 @@ export function AddReceiveLineModal({
               <span className="text-sm font-normal text-gulio-muted">
                 {step === 1
                   ? "Step 1 · Choose variant"
-                  : "Step 2 · Quantity & IMEI"}
+                  : "Step 2 · Quantity, cost & IMEI"}
               </span>
               <div className="mt-2 flex gap-1.5">
                 <span
@@ -234,25 +284,28 @@ export function AddReceiveLineModal({
 
             <ModalBody className="gap-4 !bg-white py-4">
               {error ? (
-                <div className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm text-red-800">
+                <div
+                  role="alert"
+                  className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm text-red-800"
+                >
                   {error}
                 </div>
               ) : null}
 
               {step === 1 ? (
                 <div className="space-y-3">
-                  <Field label="Search" htmlFor="recv-search">
-                    <input
-                      id="recv-search"
-                      type="search"
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                      placeholder="Name, SKU, variant…"
-                      className={inputClass}
-                      autoFocus
-                    />
-                  </Field>
-                  <div className="max-h-[300px] overflow-y-auto rounded-xl border border-gulio-border">
+                  <Input
+                    autoFocus
+                    size="sm"
+                    type="search"
+                    label="Search catalog"
+                    placeholder="Name, SKU, variant…"
+                    value={query}
+                    onValueChange={setQuery}
+                    isClearable
+                    classNames={inputClassNames}
+                  />
+                  <div className="max-h-[340px] overflow-y-auto rounded-xl border border-gulio-border">
                     {loading ? (
                       <div className="space-y-2 p-3">
                         {Array.from({ length: 4 }).map((_, i) => (
@@ -275,10 +328,7 @@ export function AddReceiveLineModal({
                               onClick={() => pick(v)}
                               className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition hover:bg-teal-50/60"
                             >
-                              <ProductThumb
-                                imageUrl={v.imageUrl}
-                                name={v.productName}
-                              />
+                              <ProductThumb imageUrl={v.imageUrl} name={v.productName} />
                               <div className="min-w-0 flex-1">
                                 <p className="truncate text-sm font-semibold">
                                   {v.productName}
@@ -286,19 +336,27 @@ export function AddReceiveLineModal({
                                 <p className="truncate text-xs text-gulio-muted">
                                   {v.variantName} ·{" "}
                                   <span className="font-mono">{v.sku}</span>
-                                  {v.price ? (
-                                    <> · {formatMoney(v.price)}</>
-                                  ) : null}
+                                  {v.price ? <> · {formatMoney(v.price)}</> : null}
                                 </p>
                               </div>
                               {v.tracksSerial ? (
-                                <span className="shrink-0 rounded-md bg-teal-50 px-2 py-0.5 text-[11px] font-semibold text-teal-800">
+                                <Chip
+                                  size="sm"
+                                  variant="flat"
+                                  color="primary"
+                                  className="h-5 shrink-0 px-1.5 text-[10px] font-semibold"
+                                >
                                   IMEI
-                                </span>
+                                </Chip>
                               ) : (
-                                <span className="shrink-0 rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-gulio-muted">
+                                <Chip
+                                  size="sm"
+                                  variant="flat"
+                                  color="default"
+                                  className="h-5 shrink-0 px-1.5 text-[10px] font-semibold"
+                                >
                                   Qty
-                                </span>
+                                </Chip>
                               )}
                             </button>
                           </li>
@@ -310,7 +368,7 @@ export function AddReceiveLineModal({
               ) : null}
 
               {step === 2 && selected ? (
-                <div className="space-y-3.5">
+                <div className="space-y-4">
                   <div className="flex items-center gap-3 rounded-xl border border-gulio-border bg-slate-50/80 px-3.5 py-3">
                     <ProductThumb
                       imageUrl={selected.imageUrl}
@@ -325,52 +383,146 @@ export function AddReceiveLineModal({
                         <span className="font-mono">{selected.sku}</span>
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setStep(1);
-                        setError(null);
-                      }}
-                      className="text-xs font-semibold text-teal-700 hover:underline"
-                    >
-                      Change
-                    </button>
+                    <div className="flex shrink-0 flex-col items-end gap-1">
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        color={selected.tracksSerial ? "primary" : "default"}
+                        className="h-5 px-1.5 text-[10px] font-semibold"
+                      >
+                        {selected.tracksSerial ? "Serial-tracked" : "Quantity item"}
+                      </Chip>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStep(1);
+                          setError(null);
+                        }}
+                        className="text-xs font-semibold text-teal-700 hover:underline"
+                      >
+                        Change
+                      </button>
+                    </div>
                   </div>
 
-                  <Field label="Quantity" htmlFor="recv-qty" required>
-                    <input
-                      id="recv-qty"
-                      inputMode="numeric"
-                      value={qty}
-                      onChange={(e) => setQty(e.target.value)}
-                      className={`${inputClass} tabular-nums`}
-                      autoFocus={!selected.tracksSerial}
-                    />
-                  </Field>
+                  <section aria-label="Quantity and pricing" className="space-y-3">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-gulio-muted">
+                      Quantity & pricing
+                    </p>
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <Input
+                        isRequired
+                        autoFocus={!selected.tracksSerial}
+                        size="sm"
+                        label="Quantity"
+                        inputMode="numeric"
+                        value={qty}
+                        onValueChange={setQty}
+                        classNames={inputClassNames}
+                        className="tabular-nums"
+                      />
+                      <Input
+                        isRequired
+                        size="sm"
+                        label="Unit cost / wholesale"
+                        inputMode="decimal"
+                        placeholder="e.g. 288000"
+                        value={unitCost}
+                        onValueChange={setUnitCost}
+                        classNames={inputClassNames}
+                        className="tabular-nums"
+                      />
+                      <Input
+                        size="sm"
+                        label="Retail price"
+                        inputMode="decimal"
+                        placeholder="Prefilled from catalogue"
+                        value={retailPrice}
+                        onValueChange={setRetailPrice}
+                        classNames={inputClassNames}
+                        className="tabular-nums"
+                      />
+                    </div>
+
+                    <div className="grid gap-2 rounded-xl border border-gulio-border bg-gulio-bg/60 px-3.5 py-3 sm:grid-cols-3">
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gulio-muted">
+                          Line total
+                        </p>
+                        <p className="mt-0.5 text-base font-bold tabular-nums text-gulio-text">
+                          {formatMoney(lineTotalNumber)}
+                        </p>
+                        <p className="text-[11px] text-gulio-muted">
+                          qty × unit cost
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gulio-muted">
+                          Margin / unit
+                        </p>
+                        <p
+                          className={`mt-0.5 text-base font-bold tabular-nums ${
+                            marginPerUnit >= 0 ? "text-emerald-700" : "text-rose-700"
+                          }`}
+                        >
+                          {formatMoney(marginPerUnit)}
+                        </p>
+                        <p className="text-[11px] text-gulio-muted">
+                          retail − unit cost
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gulio-muted">
+                          Potential margin
+                        </p>
+                        <p
+                          className={`mt-0.5 text-base font-bold tabular-nums ${
+                            potentialMargin >= 0
+                              ? "text-emerald-700"
+                              : "text-rose-700"
+                          }`}
+                        >
+                          {formatMoney(potentialMargin)}
+                        </p>
+                        <p className="text-[11px] text-gulio-muted">
+                          margin / unit × qty
+                        </p>
+                      </div>
+                    </div>
+                  </section>
 
                   {selected.tracksSerial ? (
-                    <Field
-                      label="IMEI / serials"
-                      htmlFor="recv-serials"
-                      required
-                      hint={`One per line. Need exactly ${Number.isFinite(qtyNum) && qtyNum > 0 ? qtyNum : "N"}.`}
-                    >
-                      <textarea
-                        id="recv-serials"
-                        value={serialText}
-                        onChange={(e) => setSerialText(e.target.value)}
-                        rows={4}
-                        placeholder={"3509…\n3509…"}
-                        className={`${inputClass} min-h-[100px] resize-y font-mono text-[13px]`}
-                        autoFocus
-                      />
-                      <p className="mt-1 text-xs text-gulio-muted">
-                        Entered:{" "}
-                        <span className="font-semibold tabular-nums text-gulio-text">
-                          {serials.length}
+                    <section aria-label="IMEI and serials" className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-gulio-muted">
+                          IMEI / serial numbers
+                        </p>
+                        <span
+                          className={`text-xs font-semibold tabular-nums ${
+                            serials.length === qtyNum
+                              ? "text-emerald-700"
+                              : "text-amber-700"
+                          }`}
+                        >
+                          {serials.length} / {Number.isFinite(qtyNum) && qtyNum > 0 ? qtyNum : "N"}
                         </span>
+                      </div>
+                      <Textarea
+                        autoFocus
+                        minRows={4}
+                        placeholder={"One IMEI per line (paste a list)\n3509…\n3509…"}
+                        value={serialText}
+                        onValueChange={setSerialText}
+                        classNames={{
+                          ...inputClassNames,
+                          input: "font-mono text-[13px]",
+                        }}
+                      />
+                      <p className="text-xs text-gulio-muted">
+                        Required for serial-tracked devices — one serial per unit,
+                        newline, comma or semicolon separated.
                       </p>
-                    </Field>
+                    </section>
                   ) : null}
                 </div>
               ) : null}
@@ -415,33 +567,5 @@ export function AddReceiveLineModal({
         )}
       </ModalContent>
     </Modal>
-  );
-}
-
-function Field({
-  label,
-  htmlFor,
-  required,
-  hint,
-  children,
-}: {
-  label: string;
-  htmlFor: string;
-  required?: boolean;
-  hint?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="space-y-1">
-      <label
-        htmlFor={htmlFor}
-        className="block text-xs font-semibold uppercase tracking-wide text-gulio-muted"
-      >
-        {label}
-        {required ? <span className="ml-0.5 text-red-500">*</span> : null}
-      </label>
-      {children}
-      {hint ? <p className="text-xs text-gulio-muted">{hint}</p> : null}
-    </div>
   );
 }
